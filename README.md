@@ -1,7 +1,12 @@
 Error-Tracer (@soulteary)
 ============
 
-简单的前端问题追踪程序，完善空间很大。
+Error Tracer是一个简单的JS+PHP实现的前端错误追踪应用，可以说是为了FIX线上的脚本错误而尝试做的一个比较幼稚的东西。
+
+这个想了好久，大概有几个月了，落实发现不过2，3天，当然，还有很多可以完善的地方。
+DEMO版本的界面山寨了NODEJS的[ErrorBoard](https://github.com/Lapple/ErrorBoard)，
+DEMO是在SINA APP ENGINE上部署的一个简单的应用，支持主从读写，调试信息输出。
+
 
 
 DEMO地址:
