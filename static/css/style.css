@@ -1,0 +1,120 @@
+h1#logo{
+    float: right;
+    margin: 20px 0 -20px 0;
+    color: #8A8A8A;
+}
+#control-nav{
+    margin-bottom: 0;
+}
+#data-table{
+    border: 1px solid #DDD;
+    border-top: none;
+}
+th.status{
+    width: 10px;
+}
+td.danger{
+    color: #da4f49;
+}
+td.warning{
+    color: #faa732;
+}
+
+span.status{
+    width: 14px;
+    height: 14px;
+    display: block;
+    border-radius: 14px;
+    margin-left: 10px;
+    text-indent: -9999em;
+    border-width: 1px;
+    border-style: solid;
+}
+span.invalid{
+    background-color: #EEE;
+    border-color: #A8A8A8;
+}
+span.danger{
+    background-color: #da4f49;
+    border-color: #bd362f #bd362f #802420;
+}
+span.warning{
+    background-color: #faa732;
+    border-color: #F89406 #F89406 #CE8319;
+}
+span.success{
+    background-color: #5bb75b;
+    border-color: #51a351 #51a351 #387038;
+}
+
+
+#loader {
+    text-align: center;
+    position: absolute;
+    top: 50%;
+    width: 120px;
+    left: 50%;
+    z-index: 30;
+    height: 50px;
+    margin-top: -25px;
+    margin-left: -60px;
+    font-size: 12px;
+    font-family: Tahoma, Helvetica, sans;
+    color: #5D5F5F;
+    background-color: #EEE;
+    border: 1px solid #CED7E7;
+    box-shadow: 1px 1px #C2C2C2;
+    border-radius: 4px;
+}
+
+#loader p {
+    margin: 5px 0 0;
+}
+
+#progress {
+    height: 10px;
+    margin-top: 10px;
+    border: 1px solid #B6B6B6;
+    border-left: none;
+    border-right: none;
+    position: relative;
+    background-color: #CCC;
+}
+
+#finish {
+    width: 5%;
+    background: #DDD;
+    height: 100%;
+    position: absolute;
+}
+
+span.browser{
+    display: block;
+    width: 20px;
+    height: 20px;
+    background-repeat: no-repeat;
+}
+span.chrome{
+    background-image: url("../img/s/chrome.png");
+}
+span.android{
+    background-image: url("../img/s/android.png");
+}
+span.opera{
+    background-image: url("../img/s/opera.png");
+}
+span.firefox{
+    background-image: url("../img/s/firefox.png");
+}
+span.ie{
+    background-image: url("../img/s/ie.png");
+}
+span.unknown{
+    background-image: url("../img/s/unknown.png");
+}
+span.ios{
+    background-image: url("../img/s/ios.png");
+}
+span.iphone{
+    background-image: url("../img/s/iphone.png");
+}
