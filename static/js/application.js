@@ -15,10 +15,17 @@
         var initData = function (params) {
             var url =params.url || '?mode=admin&a=query';
             var cb = params.callback || null;
-            $.ajax({url: url, dataType: 'json', type: 'POST', success: function (data) {
+            $.ajax({url: url, dataType: 'json', type: 'GET', success: function (data) {
                 loader('hide');
                 $('#data-table tbody').empty();
                 var html = '';
+                if(!data['data'] && data['nodata']){
+                    html = '<tr><td colspan="7"  class="loading-text">'+data['nodata']+'</td></tr>';
+                    $('#data-table tbody').append(html);
+                    $('body').data('status','finished');
+                    if(cb){cb();}
+                    return false;
+                }
                 var alive = count(data['data']);
                 var result = [];
                 for(var oo in data['data']){
@@ -66,10 +73,10 @@
                         console.log('PLZ WAIT FOR THE CURRENT QUERY FINISH.');
                         $('.loading-text').text('等待请求结束 ...');
                         loader('suspend');
-                        return;
+                        return false;
                     }else{
                         $('body').data('status','loading');
-                        $('.loading-text').text('页面正在加载中 ...');
+                        $('.loading-text').text('数据正在加载中 ...');
                         loader('show');
                     }
                 }
@@ -93,8 +100,8 @@
                 if (target.closest('a[href*=#CMD]')) {
                     e.preventDefault();
                     var cmd = target.attr('href');
-                        cmd = cmd.split('#CMD:')[1];
                     if (cmd) {
+                        cmd = cmd.split('#CMD:')[1];
                         switch (cmd) {
                             case 'MSG':
                                 initNavBtn(target);

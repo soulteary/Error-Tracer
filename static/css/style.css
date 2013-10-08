@@ -71,6 +71,12 @@ td.loading-text{
 }
 #page-loader{
     border-radius: 0;
+    position: absolute;
+    top: 0;
+    left: 0;
+    margin: 0;
+    width: 100%;
+    height: 5px;
 }
 span.browser{
     display: block;
@@ -101,4 +107,7 @@ span.ios{
 }
 span.iphone{
     background-image: url("../img/s/iphone.png");
+}
+span.safari{
+    background-image: url("../img/s/safari.png");
 }
