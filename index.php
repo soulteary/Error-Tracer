@@ -77,6 +77,29 @@
 
 
 </script>
+
+<style type="text/css">
+    body {
+        background: #1F2831 url(/static/img/bg.jpg) top center no-repeat;
+        font: 100.1% Calibri, "Segoi UI", "Myriad Pro", "Lucida Grande", "Lucida Sans Unicode", Lucida, Verdana, Helvetica, sans-serif;
+        color: #D3D3D3;
+        margin: 0;
+        padding: 0;
+        text-align: center;
+    }
+    p {
+        margin-top: 20px;
+    }
+    a {
+        color: #AAA9A9;
+    }
+    a:hover {
+        color: #F0F0F0;
+    }
+</style>
+<h1>Error Tracer</h1>
+
+<p>View Details: <a href="http://www.soulteary.com/2013/05/21/error-tracer.html" target="_blank">http://www.soulteary.com/2013/05/21/error-tracer.html</a>
+</p>
 </body>
 </html>
-

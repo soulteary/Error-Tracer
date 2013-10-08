@@ -1,33 +1,22 @@
 ;
-(function () {
-    var timer = 0;
-    var hasLoaded = false;
-    var PageLoading = function () {
-        var index = 0;
-        var scroll = document.getElementById('finish');
-        var init = function () {
-            if (index > 95) {
-                index = 0;
-            }
-            index++;
-            scroll.style.left = index + 'px';
-            if (!hasLoaded) {
-                timer = setTimeout(arguments.callee, 10);
-            }
-        }
-        init();
-    }
-    PageLoading();
-})();
-
-;
 (function ($) {
     $(document).ready(function () {
+        var loader = function(mode){
+            $('.progress .bar').attr('class','bar');
+            if(mode == 'show'){
+                $('.progress').fadeIn().find('.bar').css('width','100%');
+            }else if(mode == 'hide'){
+                $('.progress').find('.bar').addClass('bar-success').closest('.progress').fadeOut().find('.bar').css('width',0);
+            }else if(mode == 'suspend'){
+                $('.progress').find('.bar').addClass('bar-warning');
+            }
+        }
 
         var initData = function (params) {
             var url =params.url || '?mode=admin&a=query';
+            var cb = params.callback || null;
             $.ajax({url: url, dataType: 'json', type: 'POST', success: function (data) {
-                $('#loader').hide();
+                loader('hide');
                 $('#data-table tbody').empty();
                 var html = '';
                 var alive = count(data['data']);
@@ -54,44 +43,76 @@
                     }else{
                         level = 'warning';
                     }
-                    html += '<tr><td><span class="status '+level+'">status: '+level+'</span></td><td class="'+level+'">'+result[oo]['message']+'</td><td><a href="view-source:'+result[oo]['file']+'">'+result[oo]['file']+':'+result[oo]['line']+'</a></td><td><span class="browser '+result[oo]['browser']['type'].toLowerCase()+'" title="'+result[oo]['browser']['type']+' '+result[oo]['browser']['version']+'"></span></td><td>'+result[oo]['times']+'</td><td>'+result[oo]['lifespan']+'</td><td>'+result[oo]['last_report']+'</td></tr>';
+                    if('internet explorer' == result[oo]['browser']['type'].toLowerCase()){
+                        result[oo]['browser']['type'] = 'ie';
+                    }
+                    html += '<tr>'+
+                        '<td class="status"><span class="status '+level+'">status: '+level+'</span></td>' +
+                        '<td class="message '+level+'">'+result[oo]['message']+'</td>' +
+                        '<td class="file"><a href="view-source:'+result[oo]['file']+'">'+result[oo]['file']+':'+result[oo]['line']+'</a></td>' +
+                        '<td class="browser"><span class="browser '+result[oo]['browser']['type'].toLowerCase()+'" title="'+result[oo]['browser']['type']+' '+result[oo]['browser']['version']+'"></span></td>' +
+                        '<td class="times">'+result[oo]['times']+'</td>' +
+                        '<td class="lifespan">'+result[oo]['lifespan']+'</td>' +
+                        '<td class="report">'+result[oo]['last_report']+'</td>' +
+                        '</tr>';
                 }
 
                 $('#data-table tbody').append(html);
-
+                $('body').data('status','finished');
+                if(cb){cb();}
             },
                 beforeSend: function () {
-                    if($('body').attr('data-status')=='loading'){
+                    if($('body').data('status')=='loading'){
                         console.log('PLZ WAIT FOR THE CURRENT QUERY FINISH.');
-                        $('#loader p').text('等待请求结束 ...');
+                        $('.loading-text').text('等待请求结束 ...');
+                        loader('suspend');
                         return;
                     }else{
-                        $('body').attr('data-status','loading');
-                        $('#loader p').text('页面正在加载中 ...');
-                        $('#loader').show();
+                        $('body').data('status','loading');
+                        $('.loading-text').text('页面正在加载中 ...');
+                        loader('show');
                     }
                 }
             });
         }
-        initData({})
+
+        //init
+        $('#data-table').empty().html($('#table-msg-tpl').html());
+        initData({'callback':function(){
+            $('td.file a').on('click',function(e){window.open($(e.target).attr('href'))});
+        }});
+
         var initBtns = function () {
+            var initNavBtn = function(target){
+                $('#control-nav').find('li.active').removeClass('active');
+                target.closest('li').addClass('active');
+            }
             var body = $('body');
             body.on('click', function (e) {
                 var target = $(e.target);
-                if (target.closest('a[href^=#CMD]')) {
+                if (target.closest('a[href*=#CMD]')) {
                     e.preventDefault();
                     var cmd = target.attr('href');
-                    if (cmd) {
                         cmd = cmd.split('#CMD:')[1];
-
+                    if (cmd) {
                         switch (cmd) {
+                            case 'MSG':
+                                initNavBtn(target);
+                                $('#data-table').empty().html($('#table-msg-tpl').html());
+                                initData({'callback':function(){
+                                    $('td.file a').on('click',function(e){window.open($(e.target).attr('href'))});
+                                }});
+                                break;
                             case 'SCRIPT':
                             case 'Page':
-                            case 'BROWERS':
                                 alert('稍后完成。');
                                 break;
+                            case 'BROWERS':
+                                initNavBtn(target);
+                                $('#data-table thead').remove()
+                                break;
                         }
-                        console.log(cmd);
+                        console.log(cmd)
                     }
                 }
             })
