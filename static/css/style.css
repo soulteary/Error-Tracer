@@ -78,6 +78,22 @@ td.loading-text{
     width: 100%;
     height: 5px;
 }
+
+.b-browser, .b-times, .b-last_report, .b-lifespan{
+    width: 25%;
+}
+.b-browser{
+    -webkit-user-select: none;
+}
+.b-browser .icon-list-alt{
+    cursor: pointer;margin-left: 5px;
+}
+.b-browser span.browser{
+    width: 150px;
+    text-indent: 1.5em;
+    line-height: 1;
+    background-position: 1px 0px;
+}
 span.browser{
     display: block;
     width: 20px;

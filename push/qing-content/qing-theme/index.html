@@ -8,6 +8,8 @@
     <link href="../static/css/style.css" rel="stylesheet">
     <script type="text/javascript" src="../static/js/jquery-1.10.2.min.js"></script>
     <script type="text/javascript" src="../static/js/moment.min.js"></script>
+    <script type="text/javascript" src="../static/js/jstorage.min.js"></script>
+    <script type="text/javascript" src="../static/js/bootstrap.min.js"></script>
 </head>
 <body>
 <div class="progress progress-striped active hide" id="page-loader">
@@ -48,6 +50,28 @@
     <tr>
         <td colspan="7" class="loading-text">载入中...</td>
     </tr>
+</script>
+<script type="text/html" id="table-browser-tpl">
+    <thead>
+    <tr>
+        <th class="browser">Type</th>
+        <th class="times">Times</th>
+        <th class="lifespan">Lifespan</th>
+        <th class="report">Last Report</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+        <td colspan="7" class="loading-text">载入中...</td>
+    </tr>
+</script>
+<script type="text/html" id="common-modal-tpl">
+<div class="modal-header">
+    <button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
+    <h3>Modal header</h3>
+</div>
+<div class="modal-body"></div>
+<div class="modal-footer"><button type="button" class="btn btn-primary" data-dismiss="modal" aria-hidden="true">OK</button></div>
 </script>
 </body>
 </html>
