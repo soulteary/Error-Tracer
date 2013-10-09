@@ -127,3 +127,20 @@ span.iphone{
 span.safari{
     background-image: url("../img/s/safari.png");
 }
+
+.script-info{
+    cursor: pointer;
+    margin-left: 5px;
+}
+
+th.script-file{
+    width: 69.9%;
+}
+th.script-times,th.script-lifespan,th.script-report{
+    width: 10%;
+    white-space: nowrap;
+}
+.browser-inner-table th{
+    width: 25%;
+    white-space: nowrap;
+}

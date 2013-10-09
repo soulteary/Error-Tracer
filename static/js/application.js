@@ -2,8 +2,7 @@
 (function ($) {
     $(document).ready(function () {
 
-        var cacheTime = 1000 * 60 * 100;
-        100 //100min;
+        var cacheTime = 1000 * 60 * 100;//100min;
 
         var loader = function (mode) {
             $('.progress .bar').attr('class', 'bar');
@@ -130,7 +129,7 @@
                         '<td class="report">' + result[oo]['last_report'] + '</td>' +
                         '</tr>';
                 }
-
+                console.log(result)
                 $('#data-table tbody').append(html);
                 $('body').data('status', 'finished');
                 if (cb) {
@@ -199,7 +198,57 @@
 
                 loader('hide');
             }
+            var initSCRIPTTable = function (data) {
+                var data = data;
+                loader('show');
+                $('#data-table tbody').empty();
+                var html = '';
+                if (!data['data'] && data['nodata']) {
+                    html = '<tr><td colspan="5"  class="loading-text">' + data['nodata'] + '</td></tr>';
+                    $('#data-table tbody').append(html);
+                    $('body').data('status', 'finished');
+                    if (cb) {
+                        cb();
+                    }
+                    return false;
+                }
+                data = data['data'];
+                var result = {};
+                for (var i in data) {
+                    result[data[i]['file']] = result[data[i]['file']] || [];
+                    result[data[i]['file']].push(data[i]);
+                }
 
+                $.jStorage.set('script', result, {TTL: cacheTime});
+                var html = '';
+                for (var i in result) {
+                    html += '<tr><td><a href="#CMD:SCRIPT-INFO">[' + i + ']<i class="icon-info-sign script-info"></i></a></td><td>' + result[i].length + '</td>';
+                    html += '<td><div class="hide browser-inner-table-box"><table class="table table-bordered browser-inner-table"><thead><tr><th>Browser</th><th>Line</th><th>Message</th><th>Platform</th></tr></thead><tbody>';
+                    for (var ii = 0, jj = result[i].length; ii < jj; ii++) {
+                        html += '<tr><td>' + result[i][ii]['browser']['type'] + ' ' + result[i][ii]['browser']['version'] + '</td><td>' + result[i][ii]['line'] + '</td><td>' + result[i][ii]['message'] + '</td><td>' + result[i][ii]['platform'] + '</td></tr>';
+                        result[i]['time'] = result[i]['time'] || [];
+                        result[i]['time'].push((+new Date(result[i][ii]['date'])));
+                    }
+                    console.log(result)
+                    result[i]['_max'] = Math.max.apply(null, result[i]['time']);
+                    result[i]['_min'] = Math.min.apply(null, result[i]['time']);
+                    result[i]['last_report'] = moment(result[i]['_max']).startOf('hour').fromNow();
+                    result[i]['lifespan'] = moment(result[i]['_min']).startOf('hour').fromNow();
+                    delete result[i]['time'] && delete result[i]['_max'] && delete result[i]['_min'];
+
+                    html += '</tbody></table></div>' + result[i]['lifespan'] + '</td>';
+
+                    html += '<td>' + result[i]['last_report'] + '</td>';
+                    html += '</tr>';
+                }
+                $('#data-table tbody').append(html);
+                $('body').data('status', 'finished');
+                if (cb) {
+                    cb();
+                }
+
+                loader('hide');
+            }
             var errData = $.jStorage.get('errors');
             if (errData) {
                 switch (mode) {
@@ -208,6 +257,9 @@
                         break;
                     case 'BROWERS':
                         initBROWERSTable(errData);
+                        break;
+                    case 'SCRIPT':
+                        initSCRIPTTable(errData);
                         break;
                 }
                 return false;
@@ -222,6 +274,9 @@
                         break;
                     case 'BROWERS':
                         initBROWERSTable(data);
+                        break;
+                    case 'SCRIPT':
+                        initSCRIPTTable(data);
                         break;
                 }
             },
@@ -271,7 +326,6 @@
                                     });
                                 }, 'mode': 'MSG'});
                                 break;
-                            case 'SCRIPT':
                             case 'Page':
                                 alert('稍后完成。');
                                 break;
@@ -298,6 +352,24 @@
                                         $('#' + modalID).modal('show');
                                     });
                                 }, 'mode': 'BROWERS'});
+                                break;
+                            case 'SCRIPT':
+                                initNavBtn(target);
+                                $('#data-table').empty().html($('#table-script-tpl').html());
+                                initData({'callback': function () {
+                                    console.log(1111)
+                                }, 'mode': 'SCRIPT'});
+                                break;
+                            case 'SCRIPT-INFO':
+                                var target = $(e.target);
+                                $('.common-modal').modal('hide').remove();
+                                var modalID = RandomChars(5, 'LCASE');
+                                var tpl = '<div id="' + modalID + '" class="common-modal modal hide fade"></div>';
+                                $('body').append(tpl);
+                                $('#' + modalID).html($('#common-modal-tpl').html()).find('.modal-header h3').text('Script Request List');
+                                var tpl = target.closest('tr').find('.browser-inner-table-box').html();
+                                $('#' + modalID).find('.modal-body').html(tpl);
+                                $('#' + modalID).modal('show');
                                 break;
                         }
                         console.log(cmd)
