@@ -181,7 +181,8 @@ Authorization: Bearer replace-with-the-admin-token
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/api/v1/issues?limit=50&offset=0` | List issues, newest first |
+| `GET` | `/api/v1/issues?limit=50` | List the first page, newest first |
+| `GET` | `/api/v1/issues?limit=50&cursor=...` | Continue from `next_cursor` |
 | `GET` | `/api/v1/issues?status=open` | Filter by `open`, `resolved`, or `ignored` |
 | `GET` | `/api/v1/issues/{fingerprint}` | Read one issue |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Change the issue status |
@@ -194,7 +195,11 @@ Status update body:
 }
 ```
 
-Pages are limited to 100 issues. Offsets above 100,000 are rejected.
+Pages are limited to 100 issues. When another page exists, the response includes
+an opaque `next_cursor`; pass it back with the same `limit` and `status` filter.
+Cursor and offset cannot be combined. The legacy `offset` parameter remains
+available for compatibility, but offsets above 100,000 are rejected. The
+embedded dashboard uses cursor pagination.
 
 ## Service endpoints
 

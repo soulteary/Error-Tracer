@@ -134,13 +134,29 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 
 	total := len(issues)
 	start := min(options.Offset, total)
+	if options.After != nil {
+		start = sort.Search(total, func(index int) bool {
+			return issueIsAfterCursor(issues[index], *options.After)
+		})
+	}
 	end := min(start+options.Limit, total)
+	var next *ListCursor
+	if end < total && end > start {
+		last := issues[end-1]
+		next = &ListCursor{LastSeen: last.LastSeen, Fingerprint: last.Fingerprint}
+	}
 	return IssuePage{
 		Issues: issues[start:end],
 		Total:  total,
 		Limit:  options.Limit,
 		Offset: options.Offset,
+		Next:   next,
 	}, nil
+}
+
+func issueIsAfterCursor(issue Issue, cursor ListCursor) bool {
+	return issue.LastSeen.Before(cursor.LastSeen) ||
+		(issue.LastSeen.Equal(cursor.LastSeen) && issue.Fingerprint > cursor.Fingerprint)
 }
 
 // SetIssueStatus updates the triage state of one issue.

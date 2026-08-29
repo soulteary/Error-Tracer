@@ -81,6 +81,53 @@ func TestListIssuesReturnsBoundedPage(t *testing.T) {
 	}
 }
 
+func TestListIssuesContinuesWithOpaqueCursor(t *testing.T) {
+	memory := store.NewMemory()
+	base := time.Date(2026, time.August, 29, 2, 0, 0, 0, time.UTC)
+	for index, message := range []string{"first", "second", "third"} {
+		captured := event.Event{
+			Kind:       event.KindError,
+			Message:    message,
+			ReceivedAt: base.Add(time.Duration(index) * time.Minute),
+		}
+		if _, err := memory.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record issue: %v", err)
+		}
+	}
+	app := New(Options{
+		Store: memory, ProjectID: "project-a", IngestKey: "0123456789abcdef", AdminToken: testAdminToken,
+	})
+
+	firstResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		firstResponse,
+		authorizedRequest(http.MethodGet, "/api/v1/issues?limit=2"),
+	)
+	var first issuePageResponse
+	if err := json.NewDecoder(firstResponse.Body).Decode(&first); err != nil {
+		t.Fatalf("decode first page: %v", err)
+	}
+	if len(first.Issues) != 2 || first.NextCursor == "" {
+		t.Fatalf("first page = %#v, want two issues and next_cursor", first)
+	}
+
+	secondResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		secondResponse,
+		authorizedRequest(
+			http.MethodGet,
+			"/api/v1/issues?limit=2&cursor="+first.NextCursor,
+		),
+	)
+	var second issuePageResponse
+	if err := json.NewDecoder(secondResponse.Body).Decode(&second); err != nil {
+		t.Fatalf("decode second page: %v", err)
+	}
+	if len(second.Issues) != 1 || second.Issues[0].Message != "first" || second.NextCursor != "" {
+		t.Fatalf("second page = %#v, want final issue", second)
+	}
+}
+
 func TestListIssuesRejectsInvalidPagination(t *testing.T) {
 	for _, target := range []string{
 		"/api/v1/issues?limit=0",
@@ -89,6 +136,11 @@ func TestListIssuesRejectsInvalidPagination(t *testing.T) {
 		"/api/v1/issues?limit=1&limit=2",
 		"/api/v1/issues?offset=-1",
 		"/api/v1/issues?offset=100001",
+		"/api/v1/issues?cursor=invalid",
+		"/api/v1/issues?cursor=one&cursor=two",
+		"/api/v1/issues?offset=0&cursor=" + encodeIssueCursor(&store.ListCursor{
+			LastSeen: time.Now().UTC(), Fingerprint: strings.Repeat("0", 64),
+		}),
 	} {
 		t.Run(target, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -97,6 +149,24 @@ func TestListIssuesRejectsInvalidPagination(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
 			}
 		})
+	}
+}
+
+func TestIssueCursorRoundTrip(t *testing.T) {
+	want := store.ListCursor{
+		LastSeen:    time.Date(2026, time.August, 29, 2, 3, 4, 567, time.UTC),
+		Fingerprint: strings.Repeat("a", 64),
+	}
+	encoded := encodeIssueCursor(&want)
+	if encoded == "" || strings.ContainsAny(encoded, "+/=") {
+		t.Fatalf("encoded cursor = %q, want raw URL-safe base64", encoded)
+	}
+	got, err := decodeIssueCursor(encoded)
+	if err != nil {
+		t.Fatalf("decodeIssueCursor() error = %v", err)
+	}
+	if !got.LastSeen.Equal(want.LastSeen) || got.Fingerprint != want.Fingerprint {
+		t.Fatalf("decoded cursor = %#v, want %#v", got, want)
 	}
 }
 

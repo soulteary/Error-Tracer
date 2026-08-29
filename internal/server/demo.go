@@ -49,7 +49,7 @@ func (s *Server) listDemoIssues(w http.ResponseWriter, request *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	writeIssuePage(w, page)
 }
 
 func (s *Server) getDemoIssue(w http.ResponseWriter, request *http.Request) {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/soulteary/Error-Tracer/internal/store"
 )
@@ -15,10 +18,17 @@ import (
 const (
 	maxIssueOffset         = 100_000
 	maxIssueUpdateBodySize = 4 * 1024
+	issueCursorVersion     = 1
+	issueCursorSize        = 1 + 8 + 32
 )
 
 type issueResponse struct {
 	Issue store.Issue `json:"issue"`
+}
+
+type issuePageResponse struct {
+	store.IssuePage
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 type issueUpdateRequest struct {
@@ -44,7 +54,7 @@ func (s *Server) listIssues(w http.ResponseWriter, request *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
-	writeJSON(w, http.StatusOK, page)
+	writeIssuePage(w, page)
 }
 
 func (s *Server) getIssue(w http.ResponseWriter, request *http.Request) {
@@ -133,7 +143,7 @@ func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bo
 
 func parseListOptions(request *http.Request) (store.ListOptions, error) {
 	query := request.URL.Query()
-	if len(query["limit"]) > 1 || len(query["offset"]) > 1 {
+	if len(query["limit"]) > 1 || len(query["offset"]) > 1 || len(query["cursor"]) > 1 {
 		return store.ListOptions{}, errors.New("pagination parameters must not be repeated")
 	}
 	if len(query["status"]) > 1 {
@@ -141,6 +151,9 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 	}
 
 	var options store.ListOptions
+	if _, hasOffset := query["offset"]; hasOffset && query.Get("cursor") != "" {
+		return store.ListOptions{}, errors.New("offset and cursor are mutually exclusive")
+	}
 	if raw := query.Get("limit"); raw != "" {
 		limit, err := strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {
@@ -155,6 +168,13 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 		}
 		options.Offset = offset
 	}
+	if raw := query.Get("cursor"); raw != "" {
+		cursor, err := decodeIssueCursor(raw)
+		if err != nil {
+			return store.ListOptions{}, err
+		}
+		options.After = &cursor
+	}
 	if raw := query.Get("status"); raw != "" {
 		options.Status = store.IssueStatus(raw)
 		if !options.Status.Valid() {
@@ -162,6 +182,39 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 		}
 	}
 	return options, nil
+}
+
+func writeIssuePage(w http.ResponseWriter, page store.IssuePage) {
+	writeJSON(w, http.StatusOK, issuePageResponse{
+		IssuePage:  page,
+		NextCursor: encodeIssueCursor(page.Next),
+	})
+}
+
+func encodeIssueCursor(cursor *store.ListCursor) string {
+	if cursor == nil {
+		return ""
+	}
+	fingerprint, err := hex.DecodeString(cursor.Fingerprint)
+	if err != nil || len(fingerprint) != 32 {
+		return ""
+	}
+	encoded := make([]byte, issueCursorSize)
+	encoded[0] = issueCursorVersion
+	binary.BigEndian.PutUint64(encoded[1:9], uint64(cursor.LastSeen.UnixNano()))
+	copy(encoded[9:], fingerprint)
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func decodeIssueCursor(value string) (store.ListCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(decoded) != issueCursorSize || decoded[0] != issueCursorVersion {
+		return store.ListCursor{}, errors.New("invalid cursor")
+	}
+	return store.ListCursor{
+		LastSeen:    time.Unix(0, int64(binary.BigEndian.Uint64(decoded[1:9]))).UTC(),
+		Fingerprint: hex.EncodeToString(decoded[9:]),
+	}, nil
 }
 
 func validFingerprint(value string) bool {

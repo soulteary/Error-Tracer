@@ -148,7 +148,8 @@ Authorization: Bearer 替换为管理员令牌
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| `GET` | `/api/v1/issues?limit=50&offset=0` | 按最新出现时间列出问题 |
+| `GET` | `/api/v1/issues?limit=50` | 按最新出现时间读取第一页 |
+| `GET` | `/api/v1/issues?limit=50&cursor=...` | 使用 `next_cursor` 继续读取 |
 | `GET` | `/api/v1/issues?status=open` | 按 `open`、`resolved` 或 `ignored` 筛选 |
 | `GET` | `/api/v1/issues/{fingerprint}` | 读取单个问题 |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | 修改问题状态 |
@@ -161,7 +162,10 @@ Authorization: Bearer 替换为管理员令牌
 }
 ```
 
-每页最多返回 100 个问题，超过 100,000 的偏移量会被拒绝。
+每页最多返回 100 个问题。存在下一页时，响应会包含不透明的 `next_cursor`；
+继续请求时应保持相同的 `limit` 和 `status` 筛选。游标不能与偏移量同时使用。
+为兼容旧客户端，`offset` 参数仍然保留，但超过 100,000 的偏移量会被拒绝；
+内嵌 Dashboard 已改用游标分页。
 
 ## 服务端点
 
