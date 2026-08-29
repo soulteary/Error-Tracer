@@ -1,0 +1,31 @@
+services:
+  error-tracer:
+    build:
+      context: .
+    image: error-tracer:local
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${ERROR_TRACER_PORT:-8080}:8080"
+    environment:
+      ERROR_TRACER_ADDRESS: ":8080"
+      ERROR_TRACER_DATABASE_PATH: "/data/error-tracer.db"
+      ERROR_TRACER_PROJECT_ID: "${ERROR_TRACER_PROJECT_ID:-default}"
+      ERROR_TRACER_INGEST_KEY: "${ERROR_TRACER_INGEST_KEY:?Set ERROR_TRACER_INGEST_KEY in .env}"
+      ERROR_TRACER_ADMIN_TOKEN: "${ERROR_TRACER_ADMIN_TOKEN:?Set ERROR_TRACER_ADMIN_TOKEN in .env}"
+      ERROR_TRACER_ALLOWED_ORIGINS: "${ERROR_TRACER_ALLOWED_ORIGINS:-}"
+      ERROR_TRACER_RATE_PER_MINUTE: "${ERROR_TRACER_RATE_PER_MINUTE:-120}"
+      ERROR_TRACER_RATE_BURST: "${ERROR_TRACER_RATE_BURST:-30}"
+    volumes:
+      - error-tracer-data:/data
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    stop_grace_period: 15s
+
+volumes:
+  error-tracer-data:
