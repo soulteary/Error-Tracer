@@ -1,5 +1,7 @@
 # Error-Tracer
 
+[简体中文](README.zh-CN.md)
+
 Error-Tracer is a small, self-hosted browser error collector. The current
 service is written in Go, stores aggregated issues in SQLite, ships a
 dependency-free browser SDK, and includes an embedded triage dashboard.
@@ -19,9 +21,13 @@ tag. It is not part of the current runtime.
   batch back on failure.
 - Tracks `open`, `resolved`, and `ignored` issue states.
 - Provides an authenticated JSON API and an embedded dashboard.
+- Offers English and Simplified Chinese dashboard locales without browser
+  storage.
+- Includes an opt-in, read-only demo backed only by built-in in-memory data.
 - Enforces request-size limits, exact browser-origin allowlists, per-peer rate
   limits, and constant-time credential comparisons.
 - Runs as a single static binary or a non-root, read-only container.
+- Ships database/application benchmarks and a bounded HTTP load-test command.
 
 ## Quick start with Docker Compose
 
@@ -53,8 +59,14 @@ curl --fail http://localhost:8080/readyz
 Open <http://localhost:8080/> and connect with the admin token. The dashboard
 keeps the token only in the current tab's memory.
 
+Use the language selector or open `/?lang=zh-CN` for Simplified Chinese. The
+selection is reflected in the URL and is not saved to browser storage.
+
 The Compose deployment stores `error-tracer.db` in the named
 `error-tracer-data` volume.
+
+To evaluate the dashboard before ingesting real events, enable the isolated
+read-only demo described in [Demo mode](docs/demo.md).
 
 ## Browser SDK
 
@@ -188,8 +200,11 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 
 | Method | Path | Authentication | Description |
 | --- | --- | --- | --- |
-| `GET` | `/` | Admin token entered in the page | Embedded dashboard |
+| `GET` | `/` | None | Dashboard shell; live data calls require an admin token |
 | `GET` | `/assets/error-tracer.js` | None | Embedded browser SDK |
+| `GET` | `/api/v1/meta` | None | Public feature metadata; currently only the demo flag |
+| `GET` | `/api/v1/demo/issues` | None, demo mode only | List built-in read-only demo issues |
+| `GET` | `/api/v1/demo/issues/{fingerprint}` | None, demo mode only | Read one built-in demo issue |
 | `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |
 | `POST` | `/api/v1/events/batch` | Ingest key in the body | Submit an atomic batch |
 | `GET` | `/api/v1/issues` | Admin bearer token | List issues |
@@ -210,6 +225,7 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
 | `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum token-bucket burst per direct peer |
+| `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
 An empty origin allowlist disables browser-origin ingestion while still
@@ -228,6 +244,10 @@ go test -race ./...
 npm test
 ```
 
+Performance and capacity checks are opt-in. See
+[Performance and load testing](docs/performance.md) for reproducible commands,
+metric definitions, and load-test safety controls.
+
 Run the service from source:
 
 ```sh
@@ -241,6 +261,12 @@ Build the static service binary:
 ```sh
 CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 ```
+
+## Documentation
+
+- [Demo mode and its security boundary](docs/demo.md)
+- [Performance benchmarks and load testing](docs/performance.md)
+- [Simplified Chinese README](README.zh-CN.md)
 
 ## Deployment notes
 
