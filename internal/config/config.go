@@ -16,6 +16,7 @@ const (
 	defaultRatePerMinute   = 120
 	defaultRateBurst       = 30
 	defaultShutdownTimeout = 10 * time.Second
+	maxRetentionDays       = 3650
 )
 
 // Config contains process-level settings for the Error-Tracer service.
@@ -30,6 +31,7 @@ type Config struct {
 	RatePerMinute   int
 	RateBurst       int
 	DemoMode        bool
+	RetentionDays   int
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -70,6 +72,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	retentionDays, err := nonNegativeInteger("ERROR_TRACER_RETENTION_DAYS", 0, maxRetentionDays)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Address:         address,
@@ -82,6 +88,7 @@ func FromEnvironment() (Config, error) {
 		RatePerMinute:   ratePerMinute,
 		RateBurst:       rateBurst,
 		DemoMode:        demoMode,
+		RetentionDays:   retentionDays,
 	}, nil
 }
 
@@ -108,6 +115,18 @@ func positiveInteger(name string, fallback, maximum int) (int, error) {
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 1 || value > maximum {
 		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maximum)
+	}
+	return value, nil
+}
+
+func nonNegativeInteger(name string, fallback, maximum int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 || value > maximum {
+		return 0, fmt.Errorf("%s must be an integer between 0 and %d", name, maximum)
 	}
 	return value, nil
 }

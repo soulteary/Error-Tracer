@@ -21,6 +21,7 @@ var (
 	ErrProjectRequired = errors.New("project ID is required")
 	ErrEventsRequired  = errors.New("at least one event is required")
 	ErrReceivedAtEmpty = errors.New("event received_at is required")
+	ErrCutoffRequired  = errors.New("retention cutoff is required")
 )
 
 // IssueStatus describes the triage state of an aggregated issue.

@@ -68,6 +68,8 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	stopRetention := startRetention(ctx, issueStore, cfg.ProjectID, cfg.RetentionDays)
+	defer stopRetention()
 
 	shutdownDone := make(chan struct{})
 	go func() {
@@ -86,6 +88,64 @@ func run() int {
 	}
 	<-shutdownDone
 	return 0
+}
+
+const retentionSweepInterval = 24 * time.Hour
+
+type issuePruner interface {
+	PruneIssues(context.Context, string, time.Time) (int64, error)
+}
+
+func startRetention(parent context.Context, pruner issuePruner, projectID string, days int) func() {
+	if days <= 0 {
+		return func() {}
+	}
+
+	ctx, cancel := context.WithCancel(parent)
+	sweep := func() {
+		deleted, err := pruneExpiredIssues(ctx, pruner, projectID, days, time.Now().UTC())
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				slog.Error("prune expired issues", "error", err)
+			}
+			return
+		}
+		if deleted > 0 {
+			slog.Info("pruned expired issues", "deleted", deleted, "retention_days", days)
+		}
+	}
+	sweep()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(retentionSweepInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func pruneExpiredIssues(
+	ctx context.Context,
+	pruner issuePruner,
+	projectID string,
+	days int,
+	now time.Time,
+) (int64, error) {
+	cutoff := now.UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	return pruner.PruneIssues(ctx, projectID, cutoff)
 }
 
 type httpShutdowner interface {

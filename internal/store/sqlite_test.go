@@ -287,6 +287,51 @@ func TestSQLiteSetIssueStatusPersists(t *testing.T) {
 	}
 }
 
+func TestSQLitePruneIssuesIsProjectScopedAndUsesLastSeen(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	cutoff := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+
+	old := testEvent(cutoff.Add(-time.Hour))
+	old.Message = "expired"
+	current := testEvent(cutoff)
+	current.Message = "at cutoff"
+	otherProject := testEvent(cutoff.Add(-time.Hour))
+	otherProject.Message = "other project"
+	for _, item := range []event.Event{old, current} {
+		if _, err := database.Record(context.Background(), "project-a", item); err != nil {
+			t.Fatalf("record project-a issue: %v", err)
+		}
+	}
+	if _, err := database.Record(context.Background(), "project-b", otherProject); err != nil {
+		t.Fatalf("record project-b issue: %v", err)
+	}
+
+	deleted, err := database.PruneIssues(context.Background(), "project-a", cutoff)
+	if err != nil {
+		t.Fatalf("PruneIssues() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("PruneIssues() deleted = %d, want 1", deleted)
+	}
+	if _, err := database.GetIssue(context.Background(), "project-a", old.Fingerprint()); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("expired issue error = %v, want ErrIssueNotFound", err)
+	}
+	if _, err := database.GetIssue(context.Background(), "project-a", current.Fingerprint()); err != nil {
+		t.Fatalf("issue at cutoff was deleted: %v", err)
+	}
+	if _, err := database.GetIssue(context.Background(), "project-b", otherProject.Fingerprint()); err != nil {
+		t.Fatalf("other project issue was deleted: %v", err)
+	}
+
+	if _, err := database.PruneIssues(context.Background(), "", cutoff); !errors.Is(err, ErrProjectRequired) {
+		t.Fatalf("empty project error = %v, want ErrProjectRequired", err)
+	}
+	if _, err := database.PruneIssues(context.Background(), "project-a", time.Time{}); !errors.Is(err, ErrCutoffRequired) {
+		t.Fatalf("empty cutoff error = %v, want ErrCutoffRequired", err)
+	}
+}
+
 func openTestSQLite(t *testing.T, path string) *SQLite {
 	t.Helper()
 	database, err := OpenSQLite(context.Background(), path)

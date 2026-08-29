@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS issues (
 
 CREATE INDEX IF NOT EXISTS issues_project_status_last_seen
     ON issues (project_id, status, last_seen DESC);
+
+CREATE INDEX IF NOT EXISTS issues_project_last_seen
+    ON issues (project_id, last_seen);
 `
 
 const sqliteUpsertIssue = `
@@ -311,6 +314,36 @@ UPDATE issues SET status = ? WHERE project_id = ? AND fingerprint = ?
 		return Issue{}, fmt.Errorf("commit status transaction: %w", err)
 	}
 	return issue, nil
+}
+
+// PruneIssues atomically removes issues in one project that have not been seen
+// since the cutoff. SQLite can reuse the released pages for future writes.
+func (s *SQLite) PruneIssues(ctx context.Context, projectID string, cutoff time.Time) (int64, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return 0, ErrProjectRequired
+	}
+	if cutoff.IsZero() {
+		return 0, ErrCutoffRequired
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	result, err := s.db.ExecContext(
+		ctx,
+		"DELETE FROM issues WHERE project_id = ? AND last_seen < ?",
+		projectID,
+		cutoff.UnixNano(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("prune issues: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read pruned issue count: %w", err)
+	}
+	return deleted, nil
 }
 
 type rowQuerier interface {
