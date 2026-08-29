@@ -1,3 +1,0 @@
-(function(){
-    usususu.ssss()
-})()

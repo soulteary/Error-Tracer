@@ -1,53 +1,258 @@
-Error-Tracer (@soulteary)
-============
-![admin page](http://ww4.sinaimg.cn/mw690/48ba00e9jw1e4v8deoqtcj20sg0c7tc2.jpg)
-Error Tracer 是一个简单的JS+PHP实现的前端错误追踪应用，可以说是为了FIX线上的脚本错误而尝试做的一个比较幼稚的东西。
-这个想法几个月之前就有，实际落实发现不过2，3天时间，当然，程序尚有很多可以完善的地方。
-DEMO版本的界面山寨了NODEJS的[ErrorBoard](https://github.com/Lapple/ErrorBoard)， 现在跑在SINA APP ENGINE。
+# Error-Tracer
 
-目前的特性：
-1.数据库主从分离。
-2.自动添加浏览器信息。
-3.自动合并和计算同类型的错误信息。
-4.自动计算BUG生命周期。
+Error-Tracer is a small, self-hosted browser error collector. The current
+service is written in Go, stores aggregated issues in SQLite, ships a
+dependency-free browser SDK, and includes an embedded triage dashboard.
 
-打算加入的features:
-1.浏览器信息支持列表+自动添加。
-2.合并和计算同类型信息更精确。
-3.完成修复的BUG直接在线删除或者标记。
-4.支持根据浏览器，IP，脚本，行数，来查找和追踪触发BUG的人群。
-5.汇总邮件。
+The original 2013 PHP/MySQL implementation is preserved in the
+[`v1.0.0-legacy`](https://github.com/soulteary/Error-Tracer/tree/v1.0.0-legacy)
+tag. It is not part of the current runtime.
 
-DEMO地址: http://errorboard.sinaapp.com/
-DEMO后台: http://errorboard.sinaapp.com/push/?mode=admin
+## Features
 
+- Captures browser errors, unhandled promise rejections, and failed resources.
+- Normalizes events and removes URL credentials, queries, and fragments before
+  persistence.
+- Groups matching events with a stable SHA-256 fingerprint.
+- Persists issue aggregates in SQLite.
+- Writes batches of up to 100 events in one transaction and rolls the entire
+  batch back on failure.
+- Tracks `open`, `resolved`, and `ignored` issue states.
+- Provides an authenticated JSON API and an embedded dashboard.
+- Enforces request-size limits, exact browser-origin allowlists, per-peer rate
+  limits, and constant-time credential comparisons.
+- Runs as a single static binary or a non-root, read-only container.
 
-数据库结构:
+## Quick start with Docker Compose
 
-	CREATE TABLE `browser` (
-	 `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-	 `type` varchar(20) NOT NULL,
-	 `version` varchar(20) NOT NULL,
-	 `date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	 PRIMARY KEY (`id`)
-	) ENGINE=MyISAM AUTO_INCREMENT=27 DEFAULT CHARSET=utf8
+Copy the environment template:
 
-	CREATE TABLE `error` (
-	 `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-	 `date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '错误时间',
-	 `ip` decimal(11,0) NOT NULL,
-	 PRIMARY KEY (`id`)
-	) ENGINE=MyISAM AUTO_INCREMENT=171 DEFAULT CHARSET=utf8
-	
-	CREATE TABLE `test` (
-	 `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
-	 `file` text NOT NULL COMMENT '报错脚本路径',
-	 `line` mediumint(8) unsigned NOT NULL COMMENT '报错脚本行号',
-	 `message` text NOT NULL COMMENT '报错信息',
-	 `browser` smallint(5) unsigned NOT NULL COMMENT '浏览器类型号',
-	 `status` tinyint(3) unsigned NOT NULL DEFAULT '0' COMMENT '错误状态',
-	 `date` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '提交时间',
-	 `ip` decimal(11,0) NOT NULL,
-	 `platform` varchar(15) NOT NULL DEFAULT 'unknown' COMMENT '操作系统',
-	 PRIMARY KEY (`id`)
-	) ENGINE=MyISAM AUTO_INCREMENT=271 DEFAULT CHARSET=utf8
+```sh
+cp .env.example .env
+```
+
+Generate two independent credentials and put them in `.env`:
+
+```sh
+openssl rand -hex 16
+openssl rand -hex 24
+```
+
+The first value is suitable for `ERROR_TRACER_INGEST_KEY`; the second is
+suitable for `ERROR_TRACER_ADMIN_TOKEN`. Set
+`ERROR_TRACER_ALLOWED_ORIGINS` to the exact origin of every browser application
+that will submit events, for example `https://app.example.com`.
+
+Start the service:
+
+```sh
+docker compose up --build -d
+curl --fail http://localhost:8080/readyz
+```
+
+Open <http://localhost:8080/> and connect with the admin token. The dashboard
+keeps the token only in the current tab's memory.
+
+The Compose deployment stores `error-tracer.db` in the named
+`error-tracer-data` volume.
+
+## Browser SDK
+
+The service exposes its embedded SDK at `/assets/error-tracer.js`:
+
+```html
+<script src="https://errors.example.com/assets/error-tracer.js"></script>
+<script>
+  const tracer = ErrorTracer.init({
+    endpoint: "https://errors.example.com/api/v1/events",
+    projectKey: "replace-with-the-ingest-key",
+    release: "web@2026.08.29",
+    environment: "production",
+    tags: { region: "ap-southeast-1" },
+  });
+
+  tracer.captureMessage("checkout started");
+</script>
+```
+
+Automatic capture is enabled by default. Set `autoCapture: false` when only
+manual capture is wanted. The client also supports `sampleRate`,
+`maxEventsPerMinute`, `beforeSend`, and a custom `transport`.
+
+## Ingestion API
+
+### One event
+
+`POST /api/v1/events` accepts JSON or `text/plain` JSON, which allows the SDK
+to use `navigator.sendBeacon`:
+
+```json
+{
+  "project_key": "replace-with-the-ingest-key",
+  "event": {
+    "kind": "error",
+    "message": "TypeError: value is not a function",
+    "stack": "TypeError: value is not a function\n    at checkout (app.js:10:2)",
+    "source_url": "https://app.example.com/app.js?build=42",
+    "page_url": "https://app.example.com/checkout?session=secret",
+    "line": 10,
+    "column": 2,
+    "occurred_at": "2026-08-29T14:00:00Z",
+    "release": "web@2026.08.29",
+    "environment": "production",
+    "tags": {
+      "feature": "checkout"
+    }
+  }
+}
+```
+
+The server overwrites `id`, `received_at`, and `user_agent`. A successful
+request returns HTTP `202 Accepted`:
+
+```json
+{
+  "id": "evt_0123456789abcdef0123456789abcdef",
+  "fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+### Atomic batch
+
+`POST /api/v1/events/batch` accepts between 1 and 100 events. The decoded body
+is limited to 1 MiB. Every event is normalized and validated before SQLite is
+modified; all UPSERTs then run in one transaction.
+
+```json
+{
+  "project_key": "replace-with-the-ingest-key",
+  "events": [
+    {
+      "kind": "error",
+      "message": "first failure"
+    },
+    {
+      "kind": "unhandled_rejection",
+      "message": "second failure"
+    }
+  ]
+}
+```
+
+The response contains one server-assigned ID and fingerprint per input event:
+
+```json
+{
+  "events": [
+    {
+      "id": "evt_11111111111111111111111111111111",
+      "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "id": "evt_22222222222222222222222222222222",
+      "fingerprint": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}
+```
+
+If validation, an UPSERT, a readback, or the commit fails, no part of that
+batch is persisted.
+
+## Issue API
+
+Issue endpoints require the configured admin token:
+
+```http
+Authorization: Bearer replace-with-the-admin-token
+```
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/v1/issues?limit=50&offset=0` | List issues, newest first |
+| `GET` | `/api/v1/issues?status=open` | Filter by `open`, `resolved`, or `ignored` |
+| `GET` | `/api/v1/issues/{fingerprint}` | Read one issue |
+| `PATCH` | `/api/v1/issues/{fingerprint}` | Change the issue status |
+
+Status update body:
+
+```json
+{
+  "status": "resolved"
+}
+```
+
+Pages are limited to 100 issues. Offsets above 100,000 are rejected.
+
+## Service endpoints
+
+| Method | Path | Authentication | Description |
+| --- | --- | --- | --- |
+| `GET` | `/` | Admin token entered in the page | Embedded dashboard |
+| `GET` | `/assets/error-tracer.js` | None | Embedded browser SDK |
+| `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |
+| `POST` | `/api/v1/events/batch` | Ingest key in the body | Submit an atomic batch |
+| `GET` | `/api/v1/issues` | Admin bearer token | List issues |
+| `GET` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Read an issue |
+| `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
+| `GET` | `/healthz` | None | Process liveness |
+| `GET` | `/readyz` | None | Readiness for new work |
+
+## Configuration
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `ERROR_TRACER_ADDRESS` | No | `:8080` | HTTP listen address |
+| `ERROR_TRACER_DATABASE_PATH` | No | `error-tracer.db` | SQLite database path |
+| `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
+| `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
+| `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
+| `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
+| `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
+| `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum token-bucket burst per direct peer |
+
+`ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
+An empty origin allowlist disables browser-origin ingestion while still
+allowing clients that do not send an `Origin` header.
+
+## Local development
+
+The module declares Go 1.27. Node.js 22 or newer is needed only for browser SDK
+tests.
+
+```sh
+go mod verify
+go vet ./...
+go test ./...
+go test -race ./...
+npm test
+```
+
+Run the service from source:
+
+```sh
+ERROR_TRACER_INGEST_KEY=development-key-1 \
+ERROR_TRACER_ADMIN_TOKEN=development-admin-token-1 \
+go run ./cmd/error-tracer
+```
+
+Build the static service binary:
+
+```sh
+CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
+```
+
+## Deployment notes
+
+- Use independent, randomly generated ingest and admin credentials.
+- Put the service behind HTTPS before accepting browser traffic over a
+  network.
+- Configure exact browser origins; wildcards are intentionally rejected.
+- The rate limiter uses the direct TCP peer and does not trust forwarded
+  address headers.
+- Persist the SQLite path or `/data` volume outside the container lifecycle.
+- The process marks itself unready before graceful HTTP shutdown.
+
+## License
+
+Error-Tracer is licensed under the [Apache License 2.0](LICENSE).
