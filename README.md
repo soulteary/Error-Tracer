@@ -225,6 +225,7 @@ embedded dashboard uses cursor pagination.
 | --- | --- | --- | --- |
 | `ERROR_TRACER_ADDRESS` | No | `:8080` | HTTP listen address |
 | `ERROR_TRACER_DATABASE_PATH` | No | `error-tracer.db` | SQLite database path |
+| `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | No | `4` | SQLite pool size, from 1 to 32 |
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
 | `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
@@ -245,6 +246,17 @@ then every 24 hours. Cleanup is scoped to the configured project and uses
 `last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
 pages for later writes. Run an offline `VACUUM` only when the database file
 must be physically compacted immediately.
+
+### SQLite concurrency and backups
+
+The default four-connection pool enables SQLite WAL mode. SQLite still has one
+writer, but dashboard/API reads can continue while that writer commits. Every
+pooled connection receives the 5-second busy timeout and foreign-key settings.
+Set `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS=1` to retain fully serialized
+rollback-journal behavior; in-memory databases require that setting. WAL creates
+`-wal` and `-shm` sidecars, so use SQLite-aware backups or stop the service before
+copying database files. Keep the database on a local filesystem with reliable
+locking rather than a network filesystem that cannot safely support WAL.
 
 ### Rotate the admin token without an access gap
 

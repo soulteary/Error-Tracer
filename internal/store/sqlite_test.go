@@ -2,10 +2,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -262,9 +264,91 @@ func TestSQLiteRecordSerializesConcurrentWriters(t *testing.T) {
 	}
 }
 
+func TestSQLiteConcurrentPoolUsesWALAndConnectionPragmas(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent.db")
+	database, err := OpenSQLiteWithOptions(
+		context.Background(), path, SQLiteOptions{MaxOpenConnections: 4},
+	)
+	if err != nil {
+		t.Fatalf("open concurrent SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if got := database.db.Stats().MaxOpenConnections; got != 4 {
+		t.Fatalf("MaxOpenConnections = %d, want 4", got)
+	}
+
+	connections := make([]*sql.Conn, 0, 4)
+	for range 4 {
+		connection, err := database.db.Conn(context.Background())
+		if err != nil {
+			t.Fatalf("acquire connection: %v", err)
+		}
+		connections = append(connections, connection)
+		var journalMode string
+		var foreignKeys, busyTimeout int
+		if err := connection.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+			t.Fatalf("read journal mode: %v", err)
+		}
+		if err := connection.QueryRowContext(context.Background(), "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+			t.Fatalf("read foreign keys: %v", err)
+		}
+		if err := connection.QueryRowContext(context.Background(), "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+			t.Fatalf("read busy timeout: %v", err)
+		}
+		if !strings.EqualFold(journalMode, "wal") || foreignKeys != 1 || busyTimeout != 5000 {
+			t.Fatalf("connection pragmas = journal:%q foreign_keys:%d busy_timeout:%d", journalMode, foreignKeys, busyTimeout)
+		}
+	}
+	for _, connection := range connections {
+		if err := connection.Close(); err != nil {
+			t.Fatalf("close connection: %v", err)
+		}
+	}
+
+	captured := testEvent(time.Now().UTC())
+	if _, err := database.Record(context.Background(), "project-a", captured); err != nil {
+		t.Fatalf("seed issue: %v", err)
+	}
+	writer, err := database.db.Conn(context.Background())
+	if err != nil {
+		t.Fatalf("acquire writer: %v", err)
+	}
+	defer writer.Close()
+	if _, err := writer.ExecContext(context.Background(), "BEGIN EXCLUSIVE"); err != nil {
+		t.Fatalf("begin exclusive transaction: %v", err)
+	}
+	defer func() { _, _ = writer.ExecContext(context.Background(), "ROLLBACK") }()
+	if _, err := writer.ExecContext(
+		context.Background(),
+		"UPDATE issues SET status = 'ignored' WHERE project_id = 'project-a'",
+	); err != nil {
+		t.Fatalf("hold write transaction: %v", err)
+	}
+
+	readContext, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	page, err := database.ListIssues(readContext, "project-a", ListOptions{})
+	if err != nil {
+		t.Fatalf("read while writer is active: %v", err)
+	}
+	if len(page.Issues) != 1 || page.Issues[0].Status != IssueStatusOpen {
+		t.Fatalf("reader snapshot = %#v, want pre-transaction issue", page.Issues)
+	}
+}
+
 func TestSQLiteRejectsInvalidInputAndMapsMissingIssue(t *testing.T) {
 	if _, err := OpenSQLite(context.Background(), "  "); !errors.Is(err, ErrDatabasePathRequired) {
 		t.Fatalf("empty path error = %v, want ErrDatabasePathRequired", err)
+	}
+	if _, err := OpenSQLiteWithOptions(
+		context.Background(), ":memory:", SQLiteOptions{MaxOpenConnections: 2},
+	); !errors.Is(err, ErrConcurrentMemoryDatabase) {
+		t.Fatalf("concurrent memory error = %v, want ErrConcurrentMemoryDatabase", err)
+	}
+	if _, err := OpenSQLiteWithOptions(
+		context.Background(), "ignored.db", SQLiteOptions{MaxOpenConnections: 33},
+	); !errors.Is(err, ErrInvalidSQLiteConnectionCount) {
+		t.Fatalf("connection count error = %v, want ErrInvalidSQLiteConnectionCount", err)
 	}
 
 	database := openTestSQLite(t, ":memory:")

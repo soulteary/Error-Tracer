@@ -35,7 +35,11 @@ func run() int {
 		slog.Error("invalid configuration", "error", err)
 		return 1
 	}
-	issueStore, err := store.OpenSQLite(context.Background(), cfg.DatabasePath)
+	issueStore, err := store.OpenSQLiteWithOptions(
+		context.Background(),
+		cfg.DatabasePath,
+		store.SQLiteOptions{MaxOpenConnections: cfg.SQLiteMaxOpenConnections},
+	)
 	if err != nil {
 		slog.Error("open issue database", "error", err)
 		return 1

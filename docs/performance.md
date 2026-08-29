@@ -81,6 +81,7 @@ that isolated environment:
 
 ```sh
 ERROR_TRACER_DATABASE_PATH=/tmp/error-tracer-loadtest.db \
+ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS=4 \
 ERROR_TRACER_PROJECT_ID=loadtest \
 ERROR_TRACER_INGEST_KEY=replace-with-a-16-byte-key \
 ERROR_TRACER_ADMIN_TOKEN=replace-with-a-24-byte-token \
@@ -141,7 +142,9 @@ database size, `429` responses, and tail latency. A useful capacity point keeps
 the accepted event rate stable without sustained error growth or unbounded p99
 latency.
 
-The application uses one SQLite connection to serialize writes. Large batches
-reduce transaction overhead, while high fingerprint cardinality increases
-database size and index work. Test both aggregation-heavy and high-cardinality
-profiles before choosing production limits.
+SQLite still serializes writers, while the default four-connection WAL pool
+allows reads to continue during a write transaction. Large batches reduce
+transaction overhead, while high fingerprint cardinality increases database
+size and index work. Compare pool size `1` with the default under mixed read and
+write traffic, and test both aggregation-heavy and high-cardinality profiles
+before choosing production limits.
