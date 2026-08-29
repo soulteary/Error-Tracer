@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+.env
+*.db
+*.db-*
+node_modules
+
+# The v1 runtime is preserved by the v1.0.0-legacy tag and is not required to
+# compile the rewritten service.
+config.yaml
+file*.js
+index.php
+push
+static
