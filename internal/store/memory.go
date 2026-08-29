@@ -126,6 +126,31 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 	}, nil
 }
 
+// SetIssueStatus updates the triage state of one issue.
+func (m *Memory) SetIssueStatus(ctx context.Context, projectID, fingerprint string, status IssueStatus) (Issue, error) {
+	if err := ctx.Err(); err != nil {
+		return Issue{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return Issue{}, ErrProjectRequired
+	}
+	if !status.Valid() {
+		return Issue{}, ErrInvalidStatus
+	}
+
+	key := issueKey(projectID, fingerprint)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	issue, exists := m.issues[key]
+	if !exists {
+		return Issue{}, ErrIssueNotFound
+	}
+	issue.Status = status
+	m.issues[key] = issue
+	return cloneIssue(issue), nil
+}
+
 func issueKey(projectID, fingerprint string) string {
 	return projectID + "\x00" + fingerprint
 }

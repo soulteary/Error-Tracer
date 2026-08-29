@@ -136,6 +136,39 @@ func TestMemoryReturnsDefensiveCopies(t *testing.T) {
 	}
 }
 
+func TestMemorySetIssueStatus(t *testing.T) {
+	memory := NewMemory()
+	captured := testEvent(time.Now())
+	stored, err := memory.Record(context.Background(), "project-a", captured)
+	if err != nil {
+		t.Fatalf("record event: %v", err)
+	}
+
+	updated, err := memory.SetIssueStatus(
+		context.Background(), "project-a", stored.Fingerprint, IssueStatusResolved,
+	)
+	if err != nil {
+		t.Fatalf("set issue status: %v", err)
+	}
+	if updated.Status != IssueStatusResolved {
+		t.Fatalf("status = %q, want %q", updated.Status, IssueStatusResolved)
+	}
+	persisted, err := memory.GetIssue(context.Background(), "project-a", stored.Fingerprint)
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if persisted.Status != IssueStatusResolved {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, IssueStatusResolved)
+	}
+
+	if _, err := memory.SetIssueStatus(context.Background(), "project-a", stored.Fingerprint, "closed"); !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("invalid status error = %v, want ErrInvalidStatus", err)
+	}
+	if _, err := memory.SetIssueStatus(context.Background(), "project-a", "missing", IssueStatusIgnored); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("missing issue error = %v, want ErrIssueNotFound", err)
+	}
+}
+
 func TestMemoryRejectsInvalidInputAndCancelledContext(t *testing.T) {
 	memory := NewMemory()
 	captured := testEvent(time.Now())

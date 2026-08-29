@@ -16,6 +16,7 @@ const (
 
 var (
 	ErrIssueNotFound   = errors.New("issue not found")
+	ErrInvalidStatus   = errors.New("invalid issue status")
 	ErrProjectRequired = errors.New("project ID is required")
 	ErrReceivedAtEmpty = errors.New("event received_at is required")
 )
@@ -28,6 +29,16 @@ const (
 	IssueStatusResolved IssueStatus = "resolved"
 	IssueStatusIgnored  IssueStatus = "ignored"
 )
+
+// Valid reports whether the status can be persisted.
+func (status IssueStatus) Valid() bool {
+	switch status {
+	case IssueStatusOpen, IssueStatusResolved, IssueStatusIgnored:
+		return true
+	default:
+		return false
+	}
+}
 
 // Issue is the server-side aggregation of events with the same fingerprint.
 type Issue struct {
@@ -64,6 +75,7 @@ type Store interface {
 	Record(context.Context, string, event.Event) (Issue, error)
 	GetIssue(context.Context, string, string) (Issue, error)
 	ListIssues(context.Context, string, ListOptions) (IssuePage, error)
+	SetIssueStatus(context.Context, string, string, IssueStatus) (Issue, error)
 }
 
 func normalizeListOptions(options ListOptions) ListOptions {
