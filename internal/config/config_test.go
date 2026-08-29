@@ -13,6 +13,7 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_PROJECT_ID", "")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "development-key-1")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "development-admin-token-1")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS", "")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", "")
 	t.Setenv("ERROR_TRACER_METRICS_ENABLED", "")
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", "")
@@ -56,6 +57,7 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_PROJECT_ID", " project-a ")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", " 0123456789abcdefghijklmn ")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS", " previous-admin-token-1234 ")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", " HTTPS://APP.EXAMPLE.COM/ ,https://admin.example.com,https://app.example.com ")
 	t.Setenv("ERROR_TRACER_METRICS_ENABLED", " true ")
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", " 240 ")
@@ -81,6 +83,9 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	}
 	if cfg.AdminToken != "0123456789abcdefghijklmn" {
 		t.Fatalf("AdminToken was not loaded")
+	}
+	if cfg.PreviousAdminToken != "previous-admin-token-1234" {
+		t.Fatalf("PreviousAdminToken was not loaded")
 	}
 	wantOrigins := []string{"https://app.example.com", "https://admin.example.com"}
 	if !reflect.DeepEqual(cfg.AllowedOrigins, wantOrigins) {
@@ -152,6 +157,36 @@ func TestFromEnvironmentRequiresAdminToken(t *testing.T) {
 	_, err := FromEnvironment()
 	if err == nil || err.Error() != "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes" {
 		t.Fatalf("FromEnvironment() error = %v, want admin token byte-length error", err)
+	}
+}
+
+func TestFromEnvironmentValidatesPreviousAdminToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		previous string
+		want     string
+	}{
+		{
+			name:     "too short",
+			previous: "short",
+			want:     "ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 bytes",
+		},
+		{
+			name:     "same as current",
+			previous: "0123456789abcdefghijklmn",
+			want:     "ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must differ from ERROR_TRACER_ADMIN_TOKEN",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS", test.previous)
+			_, err := FromEnvironment()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("FromEnvironment() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

@@ -223,6 +223,7 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
 | `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
+| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token accepted temporarily during rotation |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
@@ -239,6 +240,19 @@ then every 24 hours. Cleanup is scoped to the configured project and uses
 `last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
 pages for later writes. Run an offline `VACUUM` only when the database file
 must be physically compacted immediately.
+
+### Rotate the admin token without an access gap
+
+1. Generate a new random token.
+2. Set `ERROR_TRACER_ADMIN_TOKEN` to the new value and temporarily set
+   `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` to the old value.
+3. Restart Error-Tracer and move dashboard or API clients to the new token.
+4. Clear `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` and restart again.
+
+Both tokens have the same full management permission during the overlap. The
+server evaluates every configured candidate for each request, and rejects an
+empty, short, or duplicate previous token. This overlap is a rotation aid, not
+role-based access control.
 
 ## Local development
 
@@ -280,6 +294,7 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 ## Deployment notes
 
 - Use independent, randomly generated ingest and admin credentials.
+- Keep the previous admin token configured only for the rotation window.
 - Put the service behind HTTPS before accepting browser traffic over a
   network.
 - Configure exact browser origins; wildcards are intentionally rejected.
