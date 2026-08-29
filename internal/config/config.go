@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -12,6 +13,8 @@ import (
 const (
 	defaultAddress         = ":8080"
 	defaultDatabasePath    = "error-tracer.db"
+	defaultRatePerMinute   = 120
+	defaultRateBurst       = 30
 	defaultShutdownTimeout = 10 * time.Second
 )
 
@@ -24,6 +27,8 @@ type Config struct {
 	IngestKey       string
 	AdminToken      string
 	AllowedOrigins  []string
+	RatePerMinute   int
+	RateBurst       int
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -52,6 +57,14 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ratePerMinute, err := positiveInteger("ERROR_TRACER_RATE_PER_MINUTE", defaultRatePerMinute, 60_000)
+	if err != nil {
+		return Config{}, err
+	}
+	rateBurst, err := positiveInteger("ERROR_TRACER_RATE_BURST", defaultRateBurst, 10_000)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Address:         address,
@@ -61,7 +74,21 @@ func FromEnvironment() (Config, error) {
 		IngestKey:       ingestKey,
 		AdminToken:      adminToken,
 		AllowedOrigins:  allowedOrigins,
+		RatePerMinute:   ratePerMinute,
+		RateBurst:       rateBurst,
 	}, nil
+}
+
+func positiveInteger(name string, fallback, maximum int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > maximum {
+		return 0, fmt.Errorf("%s must be an integer between 1 and %d", name, maximum)
+	}
+	return value, nil
 }
 
 func parseOrigins(value string) ([]string, error) {

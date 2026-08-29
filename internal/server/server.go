@@ -18,6 +18,7 @@ type Server struct {
 	ingestKey      string
 	adminToken     string
 	allowedOrigins map[string]struct{}
+	ingestLimiter  *rateLimiter
 	now            func() time.Time
 	newID          func() (string, error)
 }
@@ -29,6 +30,8 @@ type Options struct {
 	IngestKey      string
 	AdminToken     string
 	AllowedOrigins []string
+	RatePerMinute  int
+	RateBurst      int
 }
 
 // New creates a service with liveness and readiness endpoints.
@@ -43,6 +46,7 @@ func New(options Options) *Server {
 		ingestKey:      options.IngestKey,
 		adminToken:     options.AdminToken,
 		allowedOrigins: allowedOrigins,
+		ingestLimiter:  newRateLimiter(options.RatePerMinute, options.RateBurst),
 		now:            time.Now,
 		newID:          randomEventID,
 	}

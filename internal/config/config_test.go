@@ -13,6 +13,8 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "development-key-1")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "development-admin-token-1")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", "")
+	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", "")
+	t.Setenv("ERROR_TRACER_RATE_BURST", "")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -30,6 +32,9 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	if cfg.ProjectID != "default" {
 		t.Fatalf("ProjectID = %q, want %q", cfg.ProjectID, "default")
 	}
+	if cfg.RatePerMinute != 120 || cfg.RateBurst != 30 {
+		t.Fatalf("rate = %d/minute burst %d, want 120/minute burst 30", cfg.RatePerMinute, cfg.RateBurst)
+	}
 }
 
 func TestFromEnvironmentReadsAddress(t *testing.T) {
@@ -39,6 +44,8 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", " 0123456789abcdefghijklmn ")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", " HTTPS://APP.EXAMPLE.COM/ ,https://admin.example.com,https://app.example.com ")
+	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", " 240 ")
+	t.Setenv("ERROR_TRACER_RATE_BURST", " 40 ")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -62,6 +69,9 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	wantOrigins := []string{"https://app.example.com", "https://admin.example.com"}
 	if !reflect.DeepEqual(cfg.AllowedOrigins, wantOrigins) {
 		t.Fatalf("AllowedOrigins = %#v, want %#v", cfg.AllowedOrigins, wantOrigins)
+	}
+	if cfg.RatePerMinute != 240 || cfg.RateBurst != 40 {
+		t.Fatalf("rate = %d/minute burst %d, want 240/minute burst 40", cfg.RatePerMinute, cfg.RateBurst)
 	}
 }
 
@@ -103,6 +113,37 @@ func TestFromEnvironmentRejectsInvalidOrigins(t *testing.T) {
 
 			if _, err := FromEnvironment(); err == nil {
 				t.Fatalf("FromEnvironment() error = nil for %q", value)
+			}
+		})
+	}
+}
+
+func TestFromEnvironmentRejectsInvalidRateLimits(t *testing.T) {
+	tests := []struct {
+		name     string
+		variable string
+		value    string
+	}{
+		{name: "rate zero", variable: "ERROR_TRACER_RATE_PER_MINUTE", value: "0"},
+		{name: "rate negative", variable: "ERROR_TRACER_RATE_PER_MINUTE", value: "-1"},
+		{name: "rate text", variable: "ERROR_TRACER_RATE_PER_MINUTE", value: "many"},
+		{name: "rate too large", variable: "ERROR_TRACER_RATE_PER_MINUTE", value: "60001"},
+		{name: "burst zero", variable: "ERROR_TRACER_RATE_BURST", value: "0"},
+		{name: "burst negative", variable: "ERROR_TRACER_RATE_BURST", value: "-1"},
+		{name: "burst too large", variable: "ERROR_TRACER_RATE_BURST", value: "10001"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+			t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", "")
+			t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", "")
+			t.Setenv("ERROR_TRACER_RATE_BURST", "")
+			t.Setenv(test.variable, test.value)
+
+			if _, err := FromEnvironment(); err == nil {
+				t.Fatalf("FromEnvironment() error = nil for %s=%q", test.variable, test.value)
 			}
 		})
 	}
