@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -77,13 +78,27 @@ func (e *Event) Normalize() {
 		return
 	}
 
+	keys := make([]string, 0, len(e.Tags))
+	for key := range e.Tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	tags := make(map[string]string, len(e.Tags))
-	for key, value := range e.Tags {
-		key = strings.TrimSpace(key)
+	exactKeys := make(map[string]bool, len(e.Tags))
+	for _, originalKey := range keys {
+		key := strings.TrimSpace(originalKey)
 		if key == "" {
 			continue
 		}
-		tags[key] = strings.TrimSpace(value)
+		if originalKey == key {
+			tags[key] = strings.TrimSpace(e.Tags[originalKey])
+			exactKeys[key] = true
+			continue
+		}
+		if _, exists := tags[key]; !exists && !exactKeys[key] {
+			tags[key] = strings.TrimSpace(e.Tags[originalKey])
+		}
 	}
 	if len(tags) == 0 {
 		tags = nil
