@@ -212,6 +212,7 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
 | `GET` | `/healthz` | None | Process liveness |
 | `GET` | `/readyz` | None | Readiness for new work |
+| `GET` | `/metrics` | None, when enabled | Low-cardinality Prometheus metrics |
 
 ## Configuration
 
@@ -223,6 +224,7 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
 | `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
+| `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
 | `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum token-bucket burst per direct peer |
 | `ERROR_TRACER_RETENTION_DAYS` | No | `0` | Delete issues inactive for this many days; `0` disables cleanup |
@@ -284,6 +286,7 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 - The rate limiter uses the direct TCP peer and does not trust forwarded
   address headers.
 - Persist the SQLite path or `/data` volume outside the container lifecycle.
+- Keep `/metrics` private at the reverse proxy or network layer when enabled.
 - The process marks itself unready before graceful HTTP shutdown.
 
 ## License

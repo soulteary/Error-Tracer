@@ -30,6 +30,7 @@ type Config struct {
 	AllowedOrigins  []string
 	RatePerMinute   int
 	RateBurst       int
+	MetricsEnabled  bool
 	DemoMode        bool
 	RetentionDays   int
 }
@@ -68,6 +69,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	metricsEnabled, err := strictBoolean("ERROR_TRACER_METRICS_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
 	demoMode, err := strictBoolean("ERROR_TRACER_DEMO_MODE", false)
 	if err != nil {
 		return Config{}, err
@@ -87,6 +92,7 @@ func FromEnvironment() (Config, error) {
 		AllowedOrigins:  allowedOrigins,
 		RatePerMinute:   ratePerMinute,
 		RateBurst:       rateBurst,
+		MetricsEnabled:  metricsEnabled,
 		DemoMode:        demoMode,
 		RetentionDays:   retentionDays,
 	}, nil

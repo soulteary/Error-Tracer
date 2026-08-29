@@ -11,6 +11,31 @@ go test ./...
 go vet ./...
 ```
 
+## Runtime metrics
+
+Enable the dependency-free Prometheus endpoint in a trusted environment:
+
+```dotenv
+ERROR_TRACER_METRICS_ENABLED=true
+```
+
+Then scrape `GET /metrics`. The endpoint reports bounded route templates rather
+than raw request paths, HTTP status counts, request-duration histograms,
+in-flight requests, committed event count, readiness, and demo-mode state. The
+metrics contain no project ID, credential, URL, fingerprint, message, or other
+event-controlled label.
+
+The endpoint is unauthenticated when enabled. Restrict it with the reverse
+proxy, container network, or firewall instead of exposing it to the public
+internet. A minimal Prometheus scrape job is:
+
+```yaml
+scrape_configs:
+  - job_name: error-tracer
+    static_configs:
+      - targets: ["error-tracer:8080"]
+```
+
 ## Storage benchmarks
 
 The storage suite compares the concurrency-safe in-memory implementation with

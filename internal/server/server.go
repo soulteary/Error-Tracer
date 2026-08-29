@@ -20,6 +20,7 @@ type Server struct {
 	adminToken     string
 	allowedOrigins map[string]struct{}
 	ingestLimiter  *rateLimiter
+	metrics        *serviceMetrics
 	now            func() time.Time
 	newID          func() (string, error)
 }
@@ -34,6 +35,7 @@ type Options struct {
 	RatePerMinute  int
 	RateBurst      int
 	DemoMode       bool
+	MetricsEnabled bool
 }
 
 // New creates a service with liveness and readiness endpoints.
@@ -55,9 +57,15 @@ func New(options Options) *Server {
 	if options.DemoMode {
 		server.demoStore = newDemoStore(server.now().UTC())
 	}
+	if options.MetricsEnabled {
+		server.metrics = newServiceMetrics()
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
+	if server.metrics != nil {
+		mux.HandleFunc("GET /metrics", server.prometheusMetrics)
+	}
 	mux.HandleFunc("GET /{$}", server.dashboard)
 	mux.HandleFunc("GET /assets/dashboard.css", server.dashboardCSS)
 	mux.HandleFunc("GET /assets/dashboard.js", server.dashboardJS)
@@ -73,6 +81,9 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
 	mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
 	server.handler = mux
+	if server.metrics != nil {
+		server.handler = server.metrics.middleware(mux)
+	}
 	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != "")
 	return server
 }
