@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -60,6 +61,18 @@ ON CONFLICT (project_id, fingerprint) DO UPDATE SET
 
 var ErrDatabasePathRequired = errors.New("database path is required")
 
+var (
+	ErrInvalidSQLiteConnectionCount = errors.New("SQLite connection count must be between 1 and 32")
+	ErrConcurrentMemoryDatabase     = errors.New("in-memory SQLite databases require one connection")
+)
+
+// SQLiteOptions controls the database/sql pool used by SQLite. More than one
+// connection enables WAL so reads can continue while the single SQLite writer
+// is committing.
+type SQLiteOptions struct {
+	MaxOpenConnections int
+}
+
 // SQLite persists aggregated issues in a local SQLite database.
 type SQLite struct {
 	db *sql.DB
@@ -67,19 +80,33 @@ type SQLite struct {
 
 // OpenSQLite opens a SQLite database and applies its idempotent schema.
 func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
+	return OpenSQLiteWithOptions(ctx, path, SQLiteOptions{MaxOpenConnections: 1})
+}
+
+// OpenSQLiteWithOptions opens a SQLite database with an explicitly bounded
+// connection pool and applies its idempotent schema.
+func OpenSQLiteWithOptions(ctx context.Context, path string, options SQLiteOptions) (*SQLite, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil, ErrDatabasePathRequired
 	}
+	connections := options.MaxOpenConnections
+	if connections == 0 {
+		connections = 1
+	}
+	if connections < 1 || connections > 32 {
+		return nil, ErrInvalidSQLiteConnectionCount
+	}
+	if connections > 1 && isMemorySQLitePath(path) {
+		return nil, ErrConcurrentMemoryDatabase
+	}
 
-	database, err := sql.Open("sqlite", path)
+	database, err := sql.Open("sqlite", sqliteDataSourceName(path, connections))
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
-	// A single connection makes :memory: databases deterministic and avoids
-	// lock contention while writes are serialized by SQLite.
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
+	database.SetMaxOpenConns(connections)
+	database.SetMaxIdleConns(connections)
 
 	fail := func(operation string, operationErr error) (*SQLite, error) {
 		_ = database.Close()
@@ -89,12 +116,13 @@ func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
 	if err := database.PingContext(ctx); err != nil {
 		return fail("ping sqlite database", err)
 	}
-	for _, statement := range []string{
-		"PRAGMA busy_timeout = 5000",
-		"PRAGMA foreign_keys = ON",
-	} {
-		if _, err := database.ExecContext(ctx, statement); err != nil {
-			return fail("configure sqlite database", err)
+	if connections > 1 {
+		var journalMode string
+		if err := database.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&journalMode); err != nil {
+			return fail("read sqlite journal mode", err)
+		}
+		if !strings.EqualFold(journalMode, "wal") {
+			return fail("configure sqlite database", fmt.Errorf("journal mode is %q, want WAL", journalMode))
 		}
 	}
 	if _, err := database.ExecContext(ctx, sqliteSchema); err != nil {
@@ -102,6 +130,34 @@ func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
 	}
 
 	return &SQLite{db: database}, nil
+}
+
+func sqliteDataSourceName(path string, connections int) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+		if strings.HasSuffix(path, "?") || strings.HasSuffix(path, "&") {
+			separator = ""
+		}
+	}
+	parameters := "_busy_timeout=5000&_foreign_keys=on"
+	if connections > 1 {
+		parameters += "&_journal_mode=wal"
+	}
+	return path + separator + parameters
+}
+
+func isMemorySQLitePath(path string) bool {
+	lower := strings.ToLower(path)
+	if lower == ":memory:" || strings.HasPrefix(lower, "file::memory:") {
+		return true
+	}
+	queryIndex := strings.IndexByte(path, '?')
+	if queryIndex < 0 {
+		return false
+	}
+	query, err := url.ParseQuery(path[queryIndex+1:])
+	return err == nil && strings.EqualFold(query.Get("mode"), "memory")
 }
 
 // Close releases the database connection.

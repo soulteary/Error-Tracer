@@ -191,6 +191,7 @@ Authorization: Bearer 替换为管理员令牌
 | --- | --- | --- | --- |
 | `ERROR_TRACER_ADDRESS` | 否 | `:8080` | HTTP 监听地址 |
 | `ERROR_TRACER_DATABASE_PATH` | 否 | `error-tracer.db` | SQLite 数据库路径 |
+| `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | 否 | `4` | SQLite 连接池大小，范围 1–32 |
 | `ERROR_TRACER_PROJECT_ID` | 否 | `default` | 当前进程拥有的项目命名空间 |
 | `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
 | `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
@@ -210,6 +211,15 @@ Authorization: Bearer 替换为管理员令牌
 清理仅作用于当前项目，并依据 `last_seen` 判断；恰好位于截止时间的问题会被保留。
 SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文件，请在停机状态下另行
 执行 `VACUUM`。
+
+### SQLite 并发与备份
+
+默认的四连接池会启用 SQLite WAL 模式。SQLite 仍然只有一个写入者，但 Dashboard
+和 API 读取可以在写事务提交期间继续。每个池内连接都会设置 5 秒忙等待和外键检查。
+将 `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS=1` 可恢复完全串行的回滚日志模式；
+内存数据库也必须使用该设置。WAL 会产生 `-wal` 和 `-shm` 辅助文件，因此应使用
+理解 SQLite 的备份工具，或停服后再复制数据库文件。数据库应放在锁语义可靠的本地
+文件系统，而不是无法安全支持 WAL 的网络文件系统。
 
 ### 无访问空窗地轮换管理员令牌
 

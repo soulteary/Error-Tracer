@@ -11,29 +11,31 @@ import (
 )
 
 const (
-	defaultAddress         = ":8080"
-	defaultDatabasePath    = "error-tracer.db"
-	defaultRatePerMinute   = 120
-	defaultRateBurst       = 30
-	defaultShutdownTimeout = 10 * time.Second
-	maxRetentionDays       = 3650
+	defaultAddress           = ":8080"
+	defaultDatabasePath      = "error-tracer.db"
+	defaultSQLiteConnections = 4
+	defaultRatePerMinute     = 120
+	defaultRateBurst         = 30
+	defaultShutdownTimeout   = 10 * time.Second
+	maxRetentionDays         = 3650
 )
 
 // Config contains process-level settings for the Error-Tracer service.
 type Config struct {
-	Address            string
-	DatabasePath       string
-	ShutdownTimeout    time.Duration
-	ProjectID          string
-	IngestKey          string
-	AdminToken         string
-	PreviousAdminToken string
-	AllowedOrigins     []string
-	RatePerMinute      int
-	RateBurst          int
-	MetricsEnabled     bool
-	DemoMode           bool
-	RetentionDays      int
+	Address                  string
+	DatabasePath             string
+	SQLiteMaxOpenConnections int
+	ShutdownTimeout          time.Duration
+	ProjectID                string
+	IngestKey                string
+	AdminToken               string
+	PreviousAdminToken       string
+	AllowedOrigins           []string
+	RatePerMinute            int
+	RateBurst                int
+	MetricsEnabled           bool
+	DemoMode                 bool
+	RetentionDays            int
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -45,6 +47,12 @@ func FromEnvironment() (Config, error) {
 	databasePath := strings.TrimSpace(os.Getenv("ERROR_TRACER_DATABASE_PATH"))
 	if databasePath == "" {
 		databasePath = defaultDatabasePath
+	}
+	sqliteConnections, err := positiveInteger(
+		"ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS", defaultSQLiteConnections, 32,
+	)
+	if err != nil {
+		return Config{}, err
 	}
 	projectID := strings.TrimSpace(os.Getenv("ERROR_TRACER_PROJECT_ID"))
 	if projectID == "" {
@@ -91,19 +99,20 @@ func FromEnvironment() (Config, error) {
 	}
 
 	return Config{
-		Address:            address,
-		DatabasePath:       databasePath,
-		ShutdownTimeout:    defaultShutdownTimeout,
-		ProjectID:          projectID,
-		IngestKey:          ingestKey,
-		AdminToken:         adminToken,
-		PreviousAdminToken: previousAdminToken,
-		AllowedOrigins:     allowedOrigins,
-		RatePerMinute:      ratePerMinute,
-		RateBurst:          rateBurst,
-		MetricsEnabled:     metricsEnabled,
-		DemoMode:           demoMode,
-		RetentionDays:      retentionDays,
+		Address:                  address,
+		DatabasePath:             databasePath,
+		SQLiteMaxOpenConnections: sqliteConnections,
+		ShutdownTimeout:          defaultShutdownTimeout,
+		ProjectID:                projectID,
+		IngestKey:                ingestKey,
+		AdminToken:               adminToken,
+		PreviousAdminToken:       previousAdminToken,
+		AllowedOrigins:           allowedOrigins,
+		RatePerMinute:            ratePerMinute,
+		RateBurst:                rateBurst,
+		MetricsEnabled:           metricsEnabled,
+		DemoMode:                 demoMode,
+		RetentionDays:            retentionDays,
 	}, nil
 }
 
