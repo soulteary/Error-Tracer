@@ -39,8 +39,8 @@ scrape_configs:
 ## Storage benchmarks
 
 The storage suite compares the concurrency-safe in-memory implementation with
-SQLite. It measures atomic batches of 1, 10, and 100 events and a 50-row page
-read from 1,000 issues:
+SQLite. It measures atomic batches of 1, 10, and 100 events and 50-row offset
+and cursor page reads from 1,000 issues:
 
 ```sh
 go test ./internal/store \

@@ -57,9 +57,10 @@ that do not need a public product tour.
 | `GET` | `/api/v1/demo/issues?status=open` | Built-in issues filtered by status |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | One built-in issue and its latest event |
 
-The list endpoint accepts the same bounded `limit`, `offset`, and `status`
-parameters as the authenticated issue API. Attempts to `PATCH` a demo issue
-return `405 Method Not Allowed`.
+The list endpoint accepts the same bounded `limit`, `cursor`, legacy `offset`,
+and `status` parameters as the authenticated issue API. A page with more data
+returns `next_cursor`. Attempts to `PATCH` a demo issue return
+`405 Method Not Allowed`.
 
 ## Language selection
 

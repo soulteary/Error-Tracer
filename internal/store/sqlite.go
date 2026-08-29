@@ -35,6 +35,12 @@ CREATE INDEX IF NOT EXISTS issues_project_status_last_seen
 
 CREATE INDEX IF NOT EXISTS issues_project_last_seen
     ON issues (project_id, last_seen);
+
+CREATE INDEX IF NOT EXISTS issues_project_last_seen_fingerprint
+    ON issues (project_id, last_seen DESC, fingerprint ASC);
+
+CREATE INDEX IF NOT EXISTS issues_project_status_last_seen_fingerprint
+    ON issues (project_id, status, last_seen DESC, fingerprint ASC);
 `
 
 const sqliteUpsertIssue = `
@@ -226,15 +232,25 @@ func (s *SQLite) ListIssues(ctx context.Context, projectID string, options ListO
 		whereClause += " AND status = ?"
 		queryArguments = append(queryArguments, options.Status)
 	}
+	countArguments := append([]any{}, queryArguments...)
 
 	var total int
 	if err := transaction.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM issues WHERE "+whereClause, queryArguments...,
+		"SELECT COUNT(*) FROM issues WHERE "+whereClause, countArguments...,
 	).Scan(&total); err != nil {
 		return IssuePage{}, fmt.Errorf("count issues: %w", err)
 	}
+	if options.After != nil {
+		whereClause += " AND (last_seen < ? OR (last_seen = ? AND fingerprint > ?))"
+		lastSeen := options.After.LastSeen.UnixNano()
+		queryArguments = append(
+			queryArguments, lastSeen, lastSeen, options.After.Fingerprint,
+		)
+	}
 
-	listArguments := append(append([]any{}, queryArguments...), options.Limit, options.Offset)
+	listArguments := append(
+		append([]any{}, queryArguments...), options.Limit+1, options.Offset,
+	)
 	rows, err := transaction.QueryContext(ctx, `
 SELECT project_id, fingerprint, kind, message, source_url, line, column_number,
        status, occurrences, first_seen, last_seen, last_event
@@ -248,7 +264,7 @@ LIMIT ? OFFSET ?
 	}
 	defer rows.Close()
 
-	issues := make([]Issue, 0, min(options.Limit, total))
+	issues := make([]Issue, 0, min(options.Limit+1, total))
 	for rows.Next() {
 		issue, err := scanIssue(rows)
 		if err != nil {
@@ -265,12 +281,19 @@ LIMIT ? OFFSET ?
 	if err := transaction.Commit(); err != nil {
 		return IssuePage{}, fmt.Errorf("commit list transaction: %w", err)
 	}
+	var next *ListCursor
+	if len(issues) > options.Limit {
+		issues = issues[:options.Limit]
+		last := issues[len(issues)-1]
+		next = &ListCursor{LastSeen: last.LastSeen, Fingerprint: last.Fingerprint}
+	}
 
 	return IssuePage{
 		Issues: issues,
 		Total:  total,
 		Limit:  options.Limit,
 		Offset: options.Offset,
+		Next:   next,
 	}, nil
 }
 

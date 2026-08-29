@@ -64,14 +64,22 @@ type ListOptions struct {
 	Limit  int
 	Offset int
 	Status IssueStatus
+	After  *ListCursor
+}
+
+// ListCursor identifies the last issue returned by a stable ordered page.
+type ListCursor struct {
+	LastSeen    time.Time
+	Fingerprint string
 }
 
 // IssuePage is a stable page of issues and the total matching count.
 type IssuePage struct {
-	Issues []Issue `json:"issues"`
-	Total  int     `json:"total"`
-	Limit  int     `json:"limit"`
-	Offset int     `json:"offset"`
+	Issues []Issue     `json:"issues"`
+	Total  int         `json:"total"`
+	Limit  int         `json:"limit"`
+	Offset int         `json:"offset"`
+	Next   *ListCursor `json:"-"`
 }
 
 // Store records events and exposes their aggregated issues.
@@ -91,6 +99,9 @@ func normalizeListOptions(options ListOptions) ListOptions {
 		options.Limit = maxPageSize
 	}
 	if options.Offset < 0 {
+		options.Offset = 0
+	}
+	if options.After != nil {
 		options.Offset = 0
 	}
 	return options

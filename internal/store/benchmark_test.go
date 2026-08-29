@@ -95,17 +95,35 @@ func BenchmarkListIssues(b *testing.B) {
 					b.Fatalf("seed issues: %v", err)
 				}
 			}
-			options := ListOptions{Limit: 50, Offset: 475}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				page, err := issueStore.ListIssues(context.Background(), "benchmark", options)
-				if err != nil {
-					b.Fatalf("list issues: %v", err)
-				}
-				if len(page.Issues) != 50 || page.Total != 1_000 {
-					b.Fatalf("unexpected page: %d of %d", len(page.Issues), page.Total)
-				}
+			anchor, err := issueStore.ListIssues(
+				context.Background(), "benchmark", ListOptions{Limit: 50, Offset: 425},
+			)
+			if err != nil || anchor.Next == nil {
+				b.Fatalf("build cursor anchor: page=%#v error=%v", anchor, err)
+			}
+			cases := []struct {
+				name    string
+				options ListOptions
+			}{
+				{name: "Offset_475", options: ListOptions{Limit: 50, Offset: 475}},
+				{name: "Cursor_475", options: ListOptions{Limit: 50, After: anchor.Next}},
+			}
+			for _, test := range cases {
+				b.Run(test.name, func(b *testing.B) {
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						page, err := issueStore.ListIssues(
+							context.Background(), "benchmark", test.options,
+						)
+						if err != nil {
+							b.Fatalf("list issues: %v", err)
+						}
+						if len(page.Issues) != 50 || page.Total != 1_000 {
+							b.Fatalf("unexpected page: %d of %d", len(page.Issues), page.Total)
+						}
+					}
+				})
 			}
 		})
 	}
