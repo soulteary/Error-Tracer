@@ -53,6 +53,7 @@ func New(options Options) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
+	mux.HandleFunc("GET /assets/error-tracer.js", server.browserSDK)
 	mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
 	mux.HandleFunc("OPTIONS /api/v1/events", server.preflightEvent)
 	mux.HandleFunc("GET /api/v1/issues", server.listIssues)
