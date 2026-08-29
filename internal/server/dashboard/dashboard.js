@@ -221,7 +221,9 @@
     demo: false,
     status: "",
     limit: 25,
-    offset: 0,
+    cursor: "",
+    cursorHistory: [],
+    pageIndex: 0,
     page: null,
     selected: null,
     loading: false,
@@ -246,7 +248,7 @@
     updateDemoURL(false);
     state.demo = false;
     state.token = token;
-    state.offset = 0;
+    resetPagination();
     setLoginBusy(true);
     showMessage(elements.loginMessage, message("login.connecting"), false);
     try {
@@ -270,7 +272,7 @@
     state.token = "";
     state.demo = true;
     state.status = "";
-    state.offset = 0;
+    resetPagination();
     state.page = null;
     state.selected = null;
     elements.statusFilter.value = "";
@@ -300,18 +302,23 @@
 
   elements.statusFilter.addEventListener("change", () => {
     state.status = elements.statusFilter.value;
-    state.offset = 0;
+    resetPagination();
     loadIssues().catch(showWorkspaceError);
   });
 
   elements.previous.addEventListener("click", () => {
-    state.offset = Math.max(0, state.offset - state.limit);
-    loadIssues().catch(showWorkspaceError);
+    if (state.cursorHistory.length > 0) {
+      state.cursor = state.cursorHistory.pop();
+      state.pageIndex = Math.max(0, state.pageIndex - 1);
+      loadIssues().catch(showWorkspaceError);
+    }
   });
 
   elements.next.addEventListener("click", () => {
-    if (state.page && state.offset + state.limit < state.page.total) {
-      state.offset += state.limit;
+    if (state.page && state.page.next_cursor) {
+      state.cursorHistory.push(state.cursor);
+      state.cursor = state.page.next_cursor;
+      state.pageIndex++;
       loadIssues().catch(showWorkspaceError);
     }
   });
@@ -344,20 +351,21 @@
     setWorkspaceBusy(true);
     showMessage(elements.workspaceMessage, () => "", false);
     try {
-      const query = new URLSearchParams({
-        limit: String(state.limit),
-        offset: String(state.offset),
-      });
+      const query = new URLSearchParams({ limit: String(state.limit) });
+      if (state.cursor) {
+        query.set("cursor", state.cursor);
+      }
       if (state.status) {
         query.set("status", state.status);
       }
       state.page = await requestJSON(`/api/v1/issues?${query}`);
-      if (state.offset > 0 && state.page.total <= state.offset) {
-        state.offset = Math.max(
-          0,
-          Math.floor(Math.max(0, state.page.total - 1) / state.limit) * state.limit,
-        );
-        query.set("offset", String(state.offset));
+      if (state.cursor && state.page.issues.length === 0 && state.cursorHistory.length > 0) {
+        state.cursor = state.cursorHistory.pop();
+        state.pageIndex = Math.max(0, state.pageIndex - 1);
+        query.set("cursor", state.cursor);
+        if (!state.cursor) {
+          query.delete("cursor");
+        }
         state.page = await requestJSON(`/api/v1/issues?${query}`);
       }
       renderPage(state.page);
@@ -449,8 +457,9 @@
       ? relativeTime(issues[0].last_seen)
       : t("metrics.quiet");
 
-    const start = page.total ? state.offset + 1 : 0;
-    const end = Math.min(state.offset + issues.length, page.total || 0);
+    const pageOffset = state.pageIndex * state.limit;
+    const start = page.total ? pageOffset + 1 : 0;
+    const end = Math.min(pageOffset + issues.length, page.total || 0);
     elements.resultCopy.textContent = page.total
       ? t("issues.showing", {
         start: integerFormat.format(start),
@@ -459,10 +468,10 @@
       })
       : t("issues.noResults");
     elements.pageCopy.textContent = t("issues.page", {
-      page: integerFormat.format(Math.floor(state.offset / state.limit) + 1),
+      page: integerFormat.format(state.pageIndex + 1),
     });
-    elements.previous.disabled = state.offset === 0;
-    elements.next.disabled = state.offset + state.limit >= (page.total || 0);
+    elements.previous.disabled = state.cursorHistory.length === 0;
+    elements.next.disabled = !page.next_cursor;
   }
 
   function issueRow(issue) {
@@ -570,7 +579,7 @@
     state.token = "";
     state.demo = false;
     state.status = "";
-    state.offset = 0;
+    resetPagination();
     state.page = null;
     state.selected = null;
     closeIssueDialog();
@@ -629,9 +638,14 @@
   function setWorkspaceBusy(busy) {
     elements.refresh.disabled = busy;
     elements.statusFilter.disabled = busy;
-    elements.previous.disabled = busy || state.offset === 0;
-    elements.next.disabled = busy || !state.page ||
-      state.offset + state.limit >= state.page.total;
+    elements.previous.disabled = busy || state.cursorHistory.length === 0;
+    elements.next.disabled = busy || !state.page || !state.page.next_cursor;
+  }
+
+  function resetPagination() {
+    state.cursor = "";
+    state.cursorHistory = [];
+    state.pageIndex = 0;
   }
 
   function setStatusButtonsBusy(busy) {

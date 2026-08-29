@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -149,6 +150,44 @@ func TestSQLiteListIssuesIsProjectScopedBoundedAndOrdered(t *testing.T) {
 	}
 	if page.Issues[0].ProjectID != "project-a" {
 		t.Fatalf("project ID = %q, want project-a", page.Issues[0].ProjectID)
+	}
+}
+
+func TestSQLiteListIssuesCursorHandlesEqualTimestamps(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	receivedAt := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	for _, message := range []string{"cursor-a", "cursor-b", "cursor-c"} {
+		captured := testEvent(receivedAt)
+		captured.Message = message
+		if _, err := database.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record %q: %v", message, err)
+		}
+	}
+
+	first, err := database.ListIssues(context.Background(), "project-a", ListOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first.Issues) != 2 || first.Next == nil {
+		t.Fatalf("first page = %#v, want two issues and a cursor", first)
+	}
+	second, err := database.ListIssues(
+		context.Background(), "project-a", ListOptions{Limit: 2, After: first.Next},
+	)
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if len(second.Issues) != 1 || second.Next != nil {
+		t.Fatalf("second page = %#v, want final issue without cursor", second)
+	}
+	fingerprints := []string{
+		first.Issues[0].Fingerprint,
+		first.Issues[1].Fingerprint,
+		second.Issues[0].Fingerprint,
+	}
+	if !sort.StringsAreSorted(fingerprints) {
+		t.Fatalf("fingerprints = %#v, want stable ascending tie-break order", fingerprints)
 	}
 }
 

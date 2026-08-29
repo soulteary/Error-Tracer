@@ -127,6 +127,38 @@ func TestMemoryListIssuesIsBoundedAndOrdered(t *testing.T) {
 	}
 }
 
+func TestMemoryListIssuesContinuesFromCursor(t *testing.T) {
+	memory := NewMemory()
+	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	for index := 0; index < 3; index++ {
+		captured := testEvent(base.Add(time.Duration(index) * time.Minute))
+		captured.Message = fmt.Sprintf("cursor-%d", index)
+		if _, err := memory.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record event %d: %v", index, err)
+		}
+	}
+
+	first, err := memory.ListIssues(context.Background(), "project-a", ListOptions{Limit: 2})
+	if err != nil {
+		t.Fatalf("list first page: %v", err)
+	}
+	if len(first.Issues) != 2 || first.Next == nil {
+		t.Fatalf("first page = %#v, want two issues and a cursor", first)
+	}
+	second, err := memory.ListIssues(
+		context.Background(), "project-a", ListOptions{Limit: 2, After: first.Next},
+	)
+	if err != nil {
+		t.Fatalf("list second page: %v", err)
+	}
+	if second.Total != 3 || len(second.Issues) != 1 || second.Next != nil {
+		t.Fatalf("second page = %#v, want final issue without cursor", second)
+	}
+	if second.Issues[0].Message != "cursor-0" {
+		t.Fatalf("second page message = %q, want cursor-0", second.Issues[0].Message)
+	}
+}
+
 func TestMemoryListIssuesFiltersByStatus(t *testing.T) {
 	memory := NewMemory()
 	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)

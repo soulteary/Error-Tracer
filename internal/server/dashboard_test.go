@@ -137,10 +137,15 @@ func TestDashboardScriptAvoidsCredentialPersistenceAndHTMLInjection(t *testing.T
 		"Intl.RelativeTimeFormat",
 		"history.replaceState",
 		"data-i18n",
+		"next_cursor",
+		"cursorHistory",
 	} {
 		if !strings.Contains(dashboardScript.body, marker) {
 			t.Fatalf("dashboard script does not contain localization marker %q", marker)
 		}
+	}
+	if strings.Contains(dashboardScript.body, "offset: String(state.offset)") {
+		t.Fatal("dashboard still uses offset pagination")
 	}
 }
 
