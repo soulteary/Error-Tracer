@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,7 @@ func TestDashboardIndex(t *testing.T) {
 	for _, marker := range []string{
 		"<title>Error-Tracer</title>",
 		`id="token-form"`,
+		`id="language-select"`,
 		`id="demo-button"`,
 		`id="demo-banner"`,
 		`id="issue-list"`,
@@ -122,6 +124,60 @@ func TestDashboardScriptAvoidsCredentialPersistenceAndHTMLInjection(t *testing.T
 	for _, marker := range []string{"/api/v1/meta", "/api/v1/demo/issues"} {
 		if !strings.Contains(dashboardScript.body, marker) {
 			t.Fatalf("dashboard script does not contain demo marker %q", marker)
+		}
+	}
+	for _, marker := range []string{
+		`"zh-CN"`,
+		"Intl.RelativeTimeFormat",
+		"history.replaceState",
+		"data-i18n",
+	} {
+		if !strings.Contains(dashboardScript.body, marker) {
+			t.Fatalf("dashboard script does not contain localization marker %q", marker)
+		}
+	}
+}
+
+func TestDashboardTranslationCatalogsStayAligned(t *testing.T) {
+	body := dashboardScript.body
+	englishStart := strings.Index(body, "    en: {")
+	chineseStart := strings.Index(body, "    \"zh-CN\": {")
+	if englishStart < 0 || chineseStart < 0 || chineseStart <= englishStart {
+		t.Fatal("dashboard translation catalogs are missing")
+	}
+	chineseEndOffset := strings.Index(body[chineseStart:], "\n    },\n  };")
+	if chineseEndOffset < 0 {
+		t.Fatal("Simplified Chinese translation catalog is not terminated")
+	}
+
+	keyPattern := regexp.MustCompile(`(?m)^      "([^"]+)":`)
+	keys := func(section string) map[string]bool {
+		result := make(map[string]bool)
+		for _, match := range keyPattern.FindAllStringSubmatch(section, -1) {
+			result[match[1]] = true
+		}
+		return result
+	}
+	english := keys(body[englishStart:chineseStart])
+	chinese := keys(body[chineseStart : chineseStart+chineseEndOffset])
+	if len(english) < 80 || len(chinese) != len(english) {
+		t.Fatalf("translation key counts = en:%d zh-CN:%d", len(english), len(chinese))
+	}
+	for key := range english {
+		if !chinese[key] {
+			t.Errorf("Simplified Chinese catalog is missing %q", key)
+		}
+	}
+	for key := range chinese {
+		if !english[key] {
+			t.Errorf("English catalog is missing %q", key)
+		}
+	}
+
+	attributePattern := regexp.MustCompile(`data-i18n(?:-placeholder|-aria-label)?="([^"]+)"`)
+	for _, match := range attributePattern.FindAllStringSubmatch(dashboardIndex.body, -1) {
+		if !english[match[1]] {
+			t.Errorf("dashboard markup references unknown translation key %q", match[1])
 		}
 	}
 }

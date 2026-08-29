@@ -15,66 +15,75 @@
 
   <main class="shell">
     <header class="masthead">
-      <a class="brand" href="/" aria-label="Error-Tracer home">
+      <a class="brand" href="/" aria-label="Error-Tracer home" data-i18n-aria-label="brand.homeAria">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
         <span>
           <strong>Error-Tracer</strong>
-          <small>browser failure observatory</small>
+          <small data-i18n="brand.tagline">browser failure observatory</small>
         </span>
       </a>
-      <div class="connection" id="connection-status" hidden>
-        <span class="pulse" aria-hidden="true"></span>
-        <span id="connection-label">Connected</span>
+      <div class="masthead-actions">
+        <label class="language-control" for="language-select">
+          <span class="visually-hidden" data-i18n="language.label">Language</span>
+          <select id="language-select" aria-label="Language" data-i18n-aria-label="language.label">
+            <option value="en">English</option>
+            <option value="zh-CN">简体中文</option>
+          </select>
+        </label>
+        <div class="connection" id="connection-status" hidden>
+          <span class="pulse" aria-hidden="true"></span>
+          <span id="connection-label">Connected</span>
+        </div>
       </div>
     </header>
 
     <section class="login-panel" id="login-panel" aria-labelledby="login-title">
       <div class="login-copy">
-        <p class="eyebrow">Private control plane</p>
-        <h1 id="login-title">See the failures your users cannot explain.</h1>
-        <p>Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.</p>
+        <p class="eyebrow" data-i18n="login.eyebrow">Private control plane</p>
+        <h1 id="login-title" data-i18n="login.title">See the failures your users cannot explain.</h1>
+        <p data-i18n="login.body">Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.</p>
       </div>
       <form class="token-form" id="token-form">
-        <label for="admin-token">Admin token</label>
+        <label for="admin-token" data-i18n="login.tokenLabel">Admin token</label>
         <div class="token-row">
           <input id="admin-token" name="admin-token" type="password" required minlength="24"
                  autocomplete="off" autocapitalize="none" spellcheck="false"
-                 placeholder="Paste a 24+ character token">
-          <button class="button button-primary" type="submit">Connect</button>
+                 placeholder="Paste a 24+ character token" data-i18n-placeholder="login.tokenPlaceholder">
+          <button class="button button-primary" type="submit" data-i18n="login.connect">Connect</button>
         </div>
-        <button class="button button-demo" id="demo-button" type="button" hidden>Explore the read-only demo</button>
-        <p class="form-note" id="login-message" role="status">No credentials are stored by the dashboard.</p>
+        <button class="button button-demo" id="demo-button" type="button" hidden data-i18n="login.demo">Explore the read-only demo</button>
+        <p class="form-note" id="login-message" role="status" data-i18n="login.noCredentials">No credentials are stored by the dashboard.</p>
       </form>
     </section>
 
-    <section class="workspace" id="workspace" hidden aria-label="Issue dashboard">
+    <section class="workspace" id="workspace" hidden aria-label="Issue dashboard" data-i18n-aria-label="workspace.aria">
       <div class="workspace-heading">
         <div>
-          <p class="eyebrow">Issue stream</p>
-          <h1>Failures, grouped by root signal.</h1>
+          <p class="eyebrow" data-i18n="workspace.eyebrow">Issue stream</p>
+          <h1 data-i18n="workspace.title">Failures, grouped by root signal.</h1>
         </div>
         <div class="header-actions">
-          <button class="button button-quiet" id="refresh-button" type="button">Refresh</button>
-          <button class="button button-quiet" id="logout-button" type="button">Disconnect</button>
+          <button class="button button-quiet" id="refresh-button" type="button" data-i18n="workspace.refresh">Refresh</button>
+          <button class="button button-quiet" id="logout-button" type="button" data-i18n="workspace.disconnect">Disconnect</button>
         </div>
       </div>
 
       <aside class="demo-banner" id="demo-banner" hidden>
-        <strong>Demo workspace</strong>
-        <span>Built-in sample events only. The live database and management API remain private.</span>
+        <strong data-i18n="demo.title">Demo workspace</strong>
+        <span data-i18n="demo.body">Built-in sample events only. The live database and management API remain private.</span>
       </aside>
 
-      <section class="metrics" aria-label="Current page summary">
+      <section class="metrics" aria-label="Current page summary" data-i18n-aria-label="metrics.aria">
         <article>
-          <span>Matching issues</span>
+          <span data-i18n="metrics.matching">Matching issues</span>
           <strong id="metric-total">—</strong>
         </article>
         <article>
-          <span>Page occurrences</span>
+          <span data-i18n="metrics.occurrences">Page occurrences</span>
           <strong id="metric-occurrences">—</strong>
         </article>
         <article>
-          <span>Latest signal</span>
+          <span data-i18n="metrics.latest">Latest signal</span>
           <strong id="metric-latest">—</strong>
         </article>
       </section>
@@ -82,16 +91,16 @@
       <section class="issue-panel" aria-labelledby="issues-title">
         <div class="panel-toolbar">
           <div>
-            <h2 id="issues-title">Issues</h2>
-            <p id="result-copy">Waiting for data</p>
+            <h2 id="issues-title" data-i18n="issues.title">Issues</h2>
+            <p id="result-copy" data-i18n="issues.waiting">Waiting for data</p>
           </div>
           <label class="filter">
-            <span>Status</span>
+            <span data-i18n="issues.status">Status</span>
             <select id="status-filter">
-              <option value="">All</option>
-              <option value="open">Open</option>
-              <option value="resolved">Resolved</option>
-              <option value="ignored">Ignored</option>
+              <option value="" data-i18n="status.all">All</option>
+              <option value="open" data-i18n="status.open">Open</option>
+              <option value="resolved" data-i18n="status.resolved">Resolved</option>
+              <option value="ignored" data-i18n="status.ignored">Ignored</option>
             </select>
           </label>
         </div>
@@ -100,26 +109,26 @@
           <table>
             <thead>
               <tr>
-                <th scope="col">Issue</th>
-                <th scope="col">Status</th>
-                <th scope="col">Events</th>
-                <th scope="col">Last seen</th>
+                <th scope="col" data-i18n="issues.columnIssue">Issue</th>
+                <th scope="col" data-i18n="issues.columnStatus">Status</th>
+                <th scope="col" data-i18n="issues.columnEvents">Events</th>
+                <th scope="col" data-i18n="issues.columnLastSeen">Last seen</th>
               </tr>
             </thead>
             <tbody id="issue-list"></tbody>
           </table>
           <div class="empty-state" id="empty-state" hidden>
             <span aria-hidden="true">✓</span>
-            <strong>No matching issues</strong>
-            <p>The quiet is real—for this filter, at least.</p>
+            <strong data-i18n="issues.emptyTitle">No matching issues</strong>
+            <p data-i18n="issues.emptyBody">The quiet is real—for this filter, at least.</p>
           </div>
         </div>
 
         <footer class="pagination">
-          <span id="page-copy">Page 1</span>
+          <span id="page-copy" data-i18n="issues.pageInitial">Page 1</span>
           <div>
-            <button class="button button-quiet" id="previous-button" type="button">Previous</button>
-            <button class="button button-quiet" id="next-button" type="button">Next</button>
+            <button class="button button-quiet" id="previous-button" type="button" data-i18n="issues.previous">Previous</button>
+            <button class="button button-quiet" id="next-button" type="button" data-i18n="issues.next">Next</button>
           </div>
         </footer>
       </section>
@@ -131,30 +140,30 @@
     <div class="dialog-shell">
       <header>
         <div>
-          <p class="eyebrow" id="detail-kind">Issue detail</p>
-          <h2 id="detail-title">Loading…</h2>
+          <p class="eyebrow" id="detail-kind" data-i18n="detail.kind">Issue detail</p>
+          <h2 id="detail-title" data-i18n="detail.loading">Loading…</h2>
         </div>
-        <button class="icon-button" id="close-dialog" type="button" aria-label="Close issue detail">×</button>
+        <button class="icon-button" id="close-dialog" type="button" aria-label="Close issue detail" data-i18n-aria-label="detail.close">×</button>
       </header>
       <div class="detail-meta" id="detail-meta"></div>
       <section class="detail-section">
-        <h3>Location</h3>
+        <h3 data-i18n="detail.location">Location</h3>
         <p class="code-line" id="detail-location">—</p>
       </section>
       <section class="detail-section">
-        <h3>Latest stack</h3>
-        <pre id="detail-stack">No stack was captured.</pre>
+        <h3 data-i18n="detail.latestStack">Latest stack</h3>
+        <pre id="detail-stack" data-i18n="detail.noStack">No stack was captured.</pre>
       </section>
       <section class="detail-section">
-        <h3>Context</h3>
+        <h3 data-i18n="detail.context">Context</h3>
         <dl class="context-grid" id="detail-context"></dl>
       </section>
       <footer>
-        <span>Set status</span>
+        <span data-i18n="detail.setStatus">Set status</span>
         <div class="status-actions" id="status-actions">
-          <button class="status-button" data-status="open" type="button">Open</button>
-          <button class="status-button" data-status="resolved" type="button">Resolved</button>
-          <button class="status-button" data-status="ignored" type="button">Ignored</button>
+          <button class="status-button" data-status="open" type="button" data-i18n="status.open">Open</button>
+          <button class="status-button" data-status="resolved" type="button" data-i18n="status.resolved">Resolved</button>
+          <button class="status-button" data-status="ignored" type="button" data-i18n="status.ignored">Ignored</button>
         </div>
       </footer>
     </div>
