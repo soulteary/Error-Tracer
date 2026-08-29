@@ -16,6 +16,7 @@ import (
 )
 
 const testAdminToken = "0123456789abcdefghijklmn"
+const testPreviousAdminToken = "previous-admin-token-1234"
 
 func TestListIssuesRequiresAdminToken(t *testing.T) {
 	tests := []struct {
@@ -42,6 +43,26 @@ func TestListIssuesRequiresAdminToken(t *testing.T) {
 				t.Fatal("WWW-Authenticate header is empty")
 			}
 		})
+	}
+}
+
+func TestListIssuesAcceptsCurrentAndPreviousAdminTokens(t *testing.T) {
+	app := New(Options{
+		Store:              store.NewMemory(),
+		ProjectID:          "project-a",
+		IngestKey:          "0123456789abcdef",
+		AdminToken:         testAdminToken,
+		PreviousAdminToken: testPreviousAdminToken,
+	})
+
+	for _, token := range []string{testAdminToken, testPreviousAdminToken} {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("token %q: status = %d, want %d", token, response.Code, http.StatusOK)
+		}
 	}
 }
 

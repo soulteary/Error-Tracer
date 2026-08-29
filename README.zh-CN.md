@@ -190,6 +190,7 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_PROJECT_ID` | 否 | `default` | 当前进程拥有的项目命名空间 |
 | `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
 | `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
+| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | 否 | 空 | 轮换期间临时接受的旧管理员令牌 |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
 | `ERROR_TRACER_METRICS_ENABLED` | 否 | `false` | 在 `/metrics` 开放无鉴权 Prometheus 指标 |
 | `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟允许的采集请求数 |
@@ -205,6 +206,18 @@ Authorization: Bearer 替换为管理员令牌
 清理仅作用于当前项目，并依据 `last_seen` 判断；恰好位于截止时间的问题会被保留。
 SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文件，请在停机状态下另行
 执行 `VACUUM`。
+
+### 无访问空窗地轮换管理员令牌
+
+1. 生成一个新的随机令牌。
+2. 将 `ERROR_TRACER_ADMIN_TOKEN` 设置为新值，并临时将旧值放入
+   `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS`。
+3. 重启 Error-Tracer，将 Dashboard 或 API 客户端迁移到新令牌。
+4. 清空 `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS`，再次重启。
+
+重叠期间两个令牌都拥有完整管理权限。服务端会为每个请求检查所有已配置候选，
+并拒绝空值以外的短旧令牌或重复令牌。该机制只用于安全轮换，并不等同于基于角色
+的访问控制。
 
 ## 本地开发
 
@@ -244,6 +257,7 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 ## 部署注意事项
 
 - 采集密钥和管理员令牌必须独立、随机生成。
+- 旧管理员令牌只应在轮换窗口内临时保留。
 - 接收网络中的浏览器流量前，应将服务置于 HTTPS 之后。
 - 浏览器来源必须精确配置；系统有意拒绝通配符。
 - 限流器使用直接 TCP 对等端，不信任转发地址请求头。

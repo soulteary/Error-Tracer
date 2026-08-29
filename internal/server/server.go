@@ -17,7 +17,7 @@ type Server struct {
 	demoStore      store.Store
 	projectID      string
 	ingestKey      string
-	adminToken     string
+	adminTokens    []string
 	allowedOrigins map[string]struct{}
 	ingestLimiter  *rateLimiter
 	metrics        *serviceMetrics
@@ -27,15 +27,16 @@ type Server struct {
 
 // Options provides the dependencies required by the HTTP service.
 type Options struct {
-	Store          store.Store
-	ProjectID      string
-	IngestKey      string
-	AdminToken     string
-	AllowedOrigins []string
-	RatePerMinute  int
-	RateBurst      int
-	DemoMode       bool
-	MetricsEnabled bool
+	Store              store.Store
+	ProjectID          string
+	IngestKey          string
+	AdminToken         string
+	PreviousAdminToken string
+	AllowedOrigins     []string
+	RatePerMinute      int
+	RateBurst          int
+	DemoMode           bool
+	MetricsEnabled     bool
 }
 
 // New creates a service with liveness and readiness endpoints.
@@ -44,11 +45,15 @@ func New(options Options) *Server {
 	for _, origin := range options.AllowedOrigins {
 		allowedOrigins[origin] = struct{}{}
 	}
+	adminTokens := []string{options.AdminToken}
+	if options.PreviousAdminToken != "" && options.PreviousAdminToken != options.AdminToken {
+		adminTokens = append(adminTokens, options.PreviousAdminToken)
+	}
 	server := &Server{
 		store:          options.Store,
 		projectID:      options.ProjectID,
 		ingestKey:      options.IngestKey,
-		adminToken:     options.AdminToken,
+		adminTokens:    adminTokens,
 		allowedOrigins: allowedOrigins,
 		ingestLimiter:  newRateLimiter(options.RatePerMinute, options.RateBurst),
 		now:            time.Now,

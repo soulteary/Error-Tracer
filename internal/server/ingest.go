@@ -224,9 +224,21 @@ func ensureJSONEnd(decoder *json.Decoder) error {
 }
 
 func constantTimeEqual(left, right string) bool {
+	return constantTimeMatch(left, right) == 1
+}
+
+func constantTimeAny(value string, candidates []string) bool {
+	match := 0
+	for _, candidate := range candidates {
+		match |= constantTimeMatch(value, candidate)
+	}
+	return match == 1
+}
+
+func constantTimeMatch(left, right string) int {
 	leftDigest := sha256.Sum256([]byte(left))
 	rightDigest := sha256.Sum256([]byte(right))
-	return subtle.ConstantTimeCompare(leftDigest[:], rightDigest[:]) == 1
+	return subtle.ConstantTimeCompare(leftDigest[:], rightDigest[:])
 }
 
 func randomEventID() (string, error) {

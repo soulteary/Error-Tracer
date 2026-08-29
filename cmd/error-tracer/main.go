@@ -47,15 +47,16 @@ func run() int {
 	}()
 
 	app := appserver.New(appserver.Options{
-		Store:          issueStore,
-		ProjectID:      cfg.ProjectID,
-		IngestKey:      cfg.IngestKey,
-		AdminToken:     cfg.AdminToken,
-		AllowedOrigins: cfg.AllowedOrigins,
-		RatePerMinute:  cfg.RatePerMinute,
-		RateBurst:      cfg.RateBurst,
-		DemoMode:       cfg.DemoMode,
-		MetricsEnabled: cfg.MetricsEnabled,
+		Store:              issueStore,
+		ProjectID:          cfg.ProjectID,
+		IngestKey:          cfg.IngestKey,
+		AdminToken:         cfg.AdminToken,
+		PreviousAdminToken: cfg.PreviousAdminToken,
+		AllowedOrigins:     cfg.AllowedOrigins,
+		RatePerMinute:      cfg.RatePerMinute,
+		RateBurst:          cfg.RateBurst,
+		DemoMode:           cfg.DemoMode,
+		MetricsEnabled:     cfg.MetricsEnabled,
 	})
 
 	httpServer := &http.Server{

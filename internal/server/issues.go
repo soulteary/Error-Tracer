@@ -118,12 +118,12 @@ func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bool {
-	if s.store == nil || s.projectID == "" || s.adminToken == "" {
+	if s.store == nil || s.projectID == "" || len(s.adminTokens) == 0 || s.adminTokens[0] == "" {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "admin_unavailable"})
 		return false
 	}
 	scheme, token, found := strings.Cut(request.Header.Get("Authorization"), " ")
-	if !found || !strings.EqualFold(scheme, "Bearer") || !constantTimeEqual(token, s.adminToken) {
+	if !found || !strings.EqualFold(scheme, "Bearer") || !constantTimeAny(token, s.adminTokens) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="error-tracer"`)
 		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
 		return false

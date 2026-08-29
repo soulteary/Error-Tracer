@@ -21,18 +21,19 @@ const (
 
 // Config contains process-level settings for the Error-Tracer service.
 type Config struct {
-	Address         string
-	DatabasePath    string
-	ShutdownTimeout time.Duration
-	ProjectID       string
-	IngestKey       string
-	AdminToken      string
-	AllowedOrigins  []string
-	RatePerMinute   int
-	RateBurst       int
-	MetricsEnabled  bool
-	DemoMode        bool
-	RetentionDays   int
+	Address            string
+	DatabasePath       string
+	ShutdownTimeout    time.Duration
+	ProjectID          string
+	IngestKey          string
+	AdminToken         string
+	PreviousAdminToken string
+	AllowedOrigins     []string
+	RatePerMinute      int
+	RateBurst          int
+	MetricsEnabled     bool
+	DemoMode           bool
+	RetentionDays      int
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -56,6 +57,13 @@ func FromEnvironment() (Config, error) {
 	adminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN"))
 	if len(adminToken) < 24 {
 		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes")
+	}
+	previousAdminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS"))
+	if previousAdminToken != "" && len(previousAdminToken) < 24 {
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 bytes")
+	}
+	if previousAdminToken != "" && previousAdminToken == adminToken {
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must differ from ERROR_TRACER_ADMIN_TOKEN")
 	}
 	allowedOrigins, err := parseOrigins(os.Getenv("ERROR_TRACER_ALLOWED_ORIGINS"))
 	if err != nil {
@@ -83,18 +91,19 @@ func FromEnvironment() (Config, error) {
 	}
 
 	return Config{
-		Address:         address,
-		DatabasePath:    databasePath,
-		ShutdownTimeout: defaultShutdownTimeout,
-		ProjectID:       projectID,
-		IngestKey:       ingestKey,
-		AdminToken:      adminToken,
-		AllowedOrigins:  allowedOrigins,
-		RatePerMinute:   ratePerMinute,
-		RateBurst:       rateBurst,
-		MetricsEnabled:  metricsEnabled,
-		DemoMode:        demoMode,
-		RetentionDays:   retentionDays,
+		Address:            address,
+		DatabasePath:       databasePath,
+		ShutdownTimeout:    defaultShutdownTimeout,
+		ProjectID:          projectID,
+		IngestKey:          ingestKey,
+		AdminToken:         adminToken,
+		PreviousAdminToken: previousAdminToken,
+		AllowedOrigins:     allowedOrigins,
+		RatePerMinute:      ratePerMinute,
+		RateBurst:          rateBurst,
+		MetricsEnabled:     metricsEnabled,
+		DemoMode:           demoMode,
+		RetentionDays:      retentionDays,
 	}, nil
 }
 
