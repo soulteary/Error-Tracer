@@ -121,7 +121,13 @@ func TestDashboardScriptAvoidsCredentialPersistenceAndHTMLInjection(t *testing.T
 	if !strings.Contains(dashboardScript.body, "textContent") {
 		t.Fatal("dashboard script does not use textContent for rendering")
 	}
-	for _, marker := range []string{"/api/v1/meta", "/api/v1/demo/issues"} {
+	for _, marker := range []string{
+		"/api/v1/meta",
+		"/api/v1/demo/issues",
+		`new URLSearchParams(window.location.search).get("demo")`,
+		`searchParams.set("demo", "1")`,
+		`searchParams.delete("demo")`,
+	} {
 		if !strings.Contains(dashboardScript.body, marker) {
 			t.Fatalf("dashboard script does not contain demo marker %q", marker)
 		}

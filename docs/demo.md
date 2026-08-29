@@ -21,6 +21,18 @@ sample occurrences in total. Filtering, pagination, issue details, localized
 dates, and the English/Simplified Chinese UI can be evaluated without an admin
 token.
 
+For a link that opens the sample dashboard immediately, add `demo=1`:
+
+```text
+http://localhost:8080/?demo=1
+http://localhost:8080/?demo=1&lang=zh-CN
+```
+
+The direct link works only while `ERROR_TRACER_DEMO_MODE=true`. Opening the demo
+from the sign-in panel adds the same query parameter, so the current view can be
+copied or bookmarked. Disconnecting removes it and returns to the private
+sign-in panel.
+
 ## Security boundary
 
 The demo is deliberately separate from production data:

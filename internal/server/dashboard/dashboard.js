@@ -243,6 +243,7 @@
       showMessage(elements.loginMessage, message("login.tokenTooShort"), true);
       return;
     }
+    updateDemoURL(false);
     state.demo = false;
     state.token = token;
     state.offset = 0;
@@ -261,10 +262,21 @@
     }
   });
 
-  elements.demo.addEventListener("click", async () => {
+  elements.demo.addEventListener("click", () => {
+    enterDemo(true);
+  });
+
+  async function enterDemo(updateURL) {
     state.token = "";
     state.demo = true;
+    state.status = "";
     state.offset = 0;
+    state.page = null;
+    state.selected = null;
+    elements.statusFilter.value = "";
+    if (updateURL) {
+      updateDemoURL(true);
+    }
     setLoginBusy(true);
     showMessage(elements.loginMessage, message("login.loadingDemo"), false);
     try {
@@ -276,7 +288,7 @@
     } finally {
       setLoginBusy(false);
     }
-  });
+  }
 
   elements.refresh.addEventListener("click", () => {
     loadIssues().catch(showWorkspaceError);
@@ -566,6 +578,7 @@
     elements.connection.hidden = true;
     elements.demoBanner.hidden = true;
     elements.statusFilter.value = "";
+    updateDemoURL(false);
     updateConnectionLabel();
     elements.loginPanel.hidden = false;
     elements.tokenInput.value = "";
@@ -800,9 +813,34 @@
         return;
       }
       const metadata = await response.json();
-      elements.demo.hidden = metadata.demo_mode !== true;
+      const available = metadata.demo_mode === true;
+      elements.demo.hidden = !available;
+      if (available && demoRequested()) {
+        await enterDemo(false);
+      } else if (!available && demoRequested()) {
+        showMessage(elements.loginMessage, message("errors.demoUnavailable"), true);
+      }
     } catch (_) {
       elements.demo.hidden = true;
+    }
+  }
+
+  function demoRequested() {
+    const requested = new URLSearchParams(window.location.search).get("demo");
+    return requested === "1" || String(requested).toLowerCase() === "true";
+  }
+
+  function updateDemoURL(enabled) {
+    try {
+      const currentURL = new URL(window.location.href);
+      if (enabled) {
+        currentURL.searchParams.set("demo", "1");
+      } else {
+        currentURL.searchParams.delete("demo");
+      }
+      window.history.replaceState(null, "", currentURL);
+    } catch (_) {
+      // Demo selection still works when URL history is unavailable.
     }
   }
 
