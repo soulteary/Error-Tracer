@@ -59,6 +59,8 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /assets/error-tracer.js", server.browserSDK)
 	mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
 	mux.HandleFunc("OPTIONS /api/v1/events", server.preflightEvent)
+	mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
+	mux.HandleFunc("OPTIONS /api/v1/events/batch", server.preflightEvent)
 	mux.HandleFunc("GET /api/v1/issues", server.listIssues)
 	mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
 	mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)

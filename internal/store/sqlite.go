@@ -34,6 +34,21 @@ CREATE INDEX IF NOT EXISTS issues_project_status_last_seen
     ON issues (project_id, status, last_seen DESC);
 `
 
+const sqliteUpsertIssue = `
+INSERT INTO issues (
+    project_id, fingerprint, kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+ON CONFLICT (project_id, fingerprint) DO UPDATE SET
+    occurrences = issues.occurrences + 1,
+    first_seen = MIN(issues.first_seen, excluded.first_seen),
+    last_event = CASE
+        WHEN excluded.last_seen >= issues.last_seen THEN excluded.last_event
+        ELSE issues.last_event
+    END,
+    last_seen = MAX(issues.last_seen, excluded.last_seen)
+`
+
 var ErrDatabasePathRequired = errors.New("database path is required")
 
 // SQLite persists aggregated issues in a local SQLite database.
@@ -90,57 +105,84 @@ func (s *SQLite) Close() error {
 
 // Record atomically adds an event to its fingerprint group.
 func (s *SQLite) Record(ctx context.Context, projectID string, captured event.Event) (Issue, error) {
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" {
-		return Issue{}, ErrProjectRequired
-	}
-	if captured.ReceivedAt.IsZero() {
-		return Issue{}, ErrReceivedAtEmpty
-	}
-	if err := ctx.Err(); err != nil {
+	issues, err := s.RecordBatch(ctx, projectID, []event.Event{captured})
+	if err != nil {
 		return Issue{}, err
 	}
+	return issues[0], nil
+}
 
-	fingerprint := captured.Fingerprint()
-	encodedEvent, err := json.Marshal(captured)
+type sqliteRecord struct {
+	event       event.Event
+	fingerprint string
+	encoded     []byte
+	receivedAt  int64
+}
+
+// RecordBatch adds every event in one transaction. Any failed write or read
+// rolls the entire batch back, so callers never observe a partial batch.
+func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []event.Event) ([]Issue, error) {
+	projectID, err := validateRecordBatch(ctx, projectID, captured)
 	if err != nil {
-		return Issue{}, fmt.Errorf("encode event: %w", err)
+		return nil, err
 	}
-	receivedAt := captured.ReceivedAt.UnixNano()
+	records := make([]sqliteRecord, len(captured))
+	for index, item := range captured {
+		encoded, encodeErr := json.Marshal(item)
+		if encodeErr != nil {
+			return nil, fmt.Errorf("encode event %d: %w", index, encodeErr)
+		}
+		records[index] = sqliteRecord{
+			event:       item,
+			fingerprint: item.Fingerprint(),
+			encoded:     encoded,
+			receivedAt:  item.ReceivedAt.UnixNano(),
+		}
+	}
 
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Issue{}, fmt.Errorf("begin record transaction: %w", err)
+		return nil, fmt.Errorf("begin record batch transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
 
-	_, err = transaction.ExecContext(ctx, `
-INSERT INTO issues (
-    project_id, fingerprint, kind, message, source_url, line, column_number,
-    status, occurrences, first_seen, last_seen, last_event
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-ON CONFLICT (project_id, fingerprint) DO UPDATE SET
-    occurrences = issues.occurrences + 1,
-    first_seen = MIN(issues.first_seen, excluded.first_seen),
-    last_event = CASE
-        WHEN excluded.last_seen >= issues.last_seen THEN excluded.last_event
-        ELSE issues.last_event
-    END,
-    last_seen = MAX(issues.last_seen, excluded.last_seen)
-`, projectID, fingerprint, captured.Kind, captured.Message, captured.SourceURL,
-		captured.Line, captured.Column, IssueStatusOpen, receivedAt, receivedAt, encodedEvent)
+	statement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
 	if err != nil {
-		return Issue{}, fmt.Errorf("upsert issue: %w", err)
+		return nil, fmt.Errorf("prepare issue batch: %w", err)
+	}
+	for index, record := range records {
+		_, err = statement.ExecContext(
+			ctx, projectID, record.fingerprint, record.event.Kind,
+			record.event.Message, record.event.SourceURL, record.event.Line,
+			record.event.Column, IssueStatusOpen, record.receivedAt,
+			record.receivedAt, record.encoded,
+		)
+		if err != nil {
+			_ = statement.Close()
+			return nil, fmt.Errorf("upsert issue for event %d: %w", index, err)
+		}
+	}
+	if err := statement.Close(); err != nil {
+		return nil, fmt.Errorf("close issue batch statement: %w", err)
 	}
 
-	issue, err := queryIssue(ctx, transaction, projectID, fingerprint)
-	if err != nil {
-		return Issue{}, err
+	issues := make([]Issue, len(records))
+	issuesByFingerprint := make(map[string]Issue, len(records))
+	for index, record := range records {
+		issue, exists := issuesByFingerprint[record.fingerprint]
+		if !exists {
+			issue, err = queryIssue(ctx, transaction, projectID, record.fingerprint)
+			if err != nil {
+				return nil, fmt.Errorf("read issue for event %d: %w", index, err)
+			}
+			issuesByFingerprint[record.fingerprint] = issue
+		}
+		issues[index] = issue
 	}
 	if err := transaction.Commit(); err != nil {
-		return Issue{}, fmt.Errorf("commit record transaction: %w", err)
+		return nil, fmt.Errorf("commit record batch transaction: %w", err)
 	}
-	return issue, nil
+	return issues, nil
 }
 
 // GetIssue returns one issue from one project.

@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/soulteary/Error-Tracer/internal/event"
@@ -18,6 +19,7 @@ var (
 	ErrIssueNotFound   = errors.New("issue not found")
 	ErrInvalidStatus   = errors.New("invalid issue status")
 	ErrProjectRequired = errors.New("project ID is required")
+	ErrEventsRequired  = errors.New("at least one event is required")
 	ErrReceivedAtEmpty = errors.New("event received_at is required")
 )
 
@@ -74,6 +76,7 @@ type IssuePage struct {
 // Store records events and exposes their aggregated issues.
 type Store interface {
 	Record(context.Context, string, event.Event) (Issue, error)
+	RecordBatch(context.Context, string, []event.Event) ([]Issue, error)
 	GetIssue(context.Context, string, string) (Issue, error)
 	ListIssues(context.Context, string, ListOptions) (IssuePage, error)
 	SetIssueStatus(context.Context, string, string, IssueStatus) (Issue, error)
@@ -90,4 +93,23 @@ func normalizeListOptions(options ListOptions) ListOptions {
 		options.Offset = 0
 	}
 	return options
+}
+
+func validateRecordBatch(ctx context.Context, projectID string, captured []event.Event) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return "", ErrProjectRequired
+	}
+	if len(captured) == 0 {
+		return "", ErrEventsRequired
+	}
+	for _, item := range captured {
+		if item.ReceivedAt.IsZero() {
+			return "", ErrReceivedAtEmpty
+		}
+	}
+	return projectID, nil
 }
