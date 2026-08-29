@@ -192,11 +192,17 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
 | `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟允许的采集请求数 |
 | `ERROR_TRACER_RATE_BURST` | 否 | `30` | 令牌桶最大突发量 |
+| `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
 | `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
 
 `ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。来源
 白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
 客户端仍可提交事件。
+
+启用保留策略后，Error-Tracer 会在启动时清理一次，之后每 24 小时清理一次。
+清理仅作用于当前项目，并依据 `last_seen` 判断；恰好位于截止时间的问题会被保留。
+SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文件，请在停机状态下另行
+执行 `VACUUM`。
 
 ## 本地开发
 

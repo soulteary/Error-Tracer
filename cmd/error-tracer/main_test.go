@@ -13,6 +13,19 @@ type fakeHTTPServer struct {
 	closed      bool
 }
 
+type fakeIssuePruner struct {
+	projectID string
+	cutoff    time.Time
+	deleted   int64
+	err       error
+}
+
+func (p *fakeIssuePruner) PruneIssues(_ context.Context, projectID string, cutoff time.Time) (int64, error) {
+	p.projectID = projectID
+	p.cutoff = cutoff
+	return p.deleted, p.err
+}
+
 func (s *fakeHTTPServer) Shutdown(context.Context) error {
 	return s.shutdownErr
 }
@@ -50,5 +63,21 @@ func TestStopHTTPServerReportsCloseFailure(t *testing.T) {
 	err := stopHTTPServer(server, time.Second)
 	if !errors.Is(err, shutdownErr) || !errors.Is(err, closeErr) {
 		t.Fatalf("stopHTTPServer() error = %v, want both shutdown and close errors", err)
+	}
+}
+
+func TestPruneExpiredIssuesUsesConfiguredWindow(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.FixedZone("test", 9*60*60))
+	pruner := &fakeIssuePruner{deleted: 7}
+	deleted, err := pruneExpiredIssues(context.Background(), pruner, "project-a", 30, now)
+	if err != nil {
+		t.Fatalf("pruneExpiredIssues() error = %v", err)
+	}
+	if deleted != 7 || pruner.projectID != "project-a" {
+		t.Fatalf("deleted = %d, project = %q", deleted, pruner.projectID)
+	}
+	wantCutoff := now.UTC().Add(-30 * 24 * time.Hour)
+	if !pruner.cutoff.Equal(wantCutoff) {
+		t.Fatalf("cutoff = %s, want %s", pruner.cutoff, wantCutoff)
 	}
 }

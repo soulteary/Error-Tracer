@@ -225,11 +225,18 @@ Pages are limited to 100 issues. Offsets above 100,000 are rejected.
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
 | `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum token-bucket burst per direct peer |
+| `ERROR_TRACER_RETENTION_DAYS` | No | `0` | Delete issues inactive for this many days; `0` disables cleanup |
 | `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
+
+When retention is enabled, Error-Tracer removes expired issues at startup and
+then every 24 hours. Cleanup is scoped to the configured project and uses
+`last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
+pages for later writes. Run an offline `VACUUM` only when the database file
+must be physically compacted immediately.
 
 ## Local development
 

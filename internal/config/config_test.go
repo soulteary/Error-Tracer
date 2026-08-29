@@ -17,6 +17,7 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", "")
 	t.Setenv("ERROR_TRACER_RATE_BURST", "")
 	t.Setenv("ERROR_TRACER_DEMO_MODE", "")
+	t.Setenv("ERROR_TRACER_RETENTION_DAYS", "")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -40,6 +41,9 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	if cfg.DemoMode {
 		t.Fatal("DemoMode = true, want false")
 	}
+	if cfg.RetentionDays != 0 {
+		t.Fatalf("RetentionDays = %d, want 0", cfg.RetentionDays)
+	}
 }
 
 func TestFromEnvironmentReadsAddress(t *testing.T) {
@@ -52,6 +56,7 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", " 240 ")
 	t.Setenv("ERROR_TRACER_RATE_BURST", " 40 ")
 	t.Setenv("ERROR_TRACER_DEMO_MODE", " true ")
+	t.Setenv("ERROR_TRACER_RETENTION_DAYS", " 90 ")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -81,6 +86,22 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	}
 	if !cfg.DemoMode {
 		t.Fatal("DemoMode = false, want true")
+	}
+	if cfg.RetentionDays != 90 {
+		t.Fatalf("RetentionDays = %d, want 90", cfg.RetentionDays)
+	}
+}
+
+func TestFromEnvironmentRejectsInvalidRetentionDays(t *testing.T) {
+	for _, value := range []string{"-1", "many", "3651"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+			t.Setenv("ERROR_TRACER_RETENTION_DAYS", value)
+			if _, err := FromEnvironment(); err == nil {
+				t.Fatalf("FromEnvironment() error = nil for retention %q", value)
+			}
+		})
 	}
 }
 
