@@ -1,5 +1,30 @@
 # Demo mode
 
+## Configuration-free product tour
+
+The shortest path to the sample dashboard is the dedicated demo command:
+
+```sh
+go run ./cmd/error-tracer demo
+```
+
+Open <http://127.0.0.1:8080/>. The dashboard enters the read-only sample
+workspace immediately. Unless `ERROR_TRACER_ADDRESS` is set, the source command
+listens only on loopback.
+
+The same tour can run from the container image:
+
+```sh
+docker build -t error-tracer:demo .
+docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
+```
+
+Demo-only startup does not require an ingest key or admin token, does not open
+or create a SQLite database, and does not register the event ingestion or admin
+issue routes. Its in-memory samples reset whenever the process restarts.
+
+## Demo alongside a configured service
+
 Demo mode makes the embedded dashboard useful before a project has submitted
 any real events. It is disabled by default and must be enabled explicitly:
 
@@ -41,6 +66,8 @@ The demo is deliberately separate from production data:
 - Demo handlers never read from or write to the configured SQLite database.
 - Only `GET` list and detail routes exist under `/api/v1/demo/issues`.
 - The normal `/api/v1/issues` routes still require the admin bearer token.
+- In `error-tracer demo` mode, collection and management routes are not
+  registered at all.
 - The dashboard disables status changes while the demo is active.
 - `/api/v1/meta` reveals only whether demo mode is enabled.
 
@@ -52,7 +79,7 @@ that do not need a public product tour.
 
 | Method | Path | Result |
 | --- | --- | --- |
-| `GET` | `/api/v1/meta` | `{"demo_mode":true}` when enabled |
+| `GET` | `/api/v1/meta` | Demo availability; also `"demo_only":true` for the demo command |
 | `GET` | `/api/v1/demo/issues` | Paginated built-in issue list |
 | `GET` | `/api/v1/demo/issues?status=open` | Built-in issues filtered by status |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | One built-in issue and its latest event |

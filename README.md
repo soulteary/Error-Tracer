@@ -24,10 +24,31 @@ tag. It is not part of the current runtime.
 - Offers English and Simplified Chinese dashboard locales without browser
   storage.
 - Includes an opt-in, read-only demo backed only by built-in in-memory data.
+- Starts a configuration-free, database-free product tour with `error-tracer demo`.
 - Enforces request-size limits, exact browser-origin allowlists, per-peer rate
   limits, and constant-time credential comparisons.
 - Runs as a single static binary or a non-root, read-only container.
 - Ships database/application benchmarks and a bounded HTTP load-test command.
+
+## Try the demo without configuration
+
+Run the product tour directly from the source tree:
+
+```sh
+go run ./cmd/error-tracer demo
+```
+
+Then open <http://127.0.0.1:8080/>. The dashboard enters the built-in read-only
+sample workspace immediately. This command does not require credentials, does
+not open SQLite, and does not register the event ingestion or admin issue
+routes.
+
+The same isolated tour can run from the container image:
+
+```sh
+docker build -t error-tracer:demo .
+docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
+```
 
 ## Quick start with Docker Compose
 
@@ -207,7 +228,7 @@ embedded dashboard uses cursor pagination.
 | --- | --- | --- | --- |
 | `GET` | `/` | None | Dashboard shell; live data calls require an admin token |
 | `GET` | `/assets/error-tracer.js` | None | Embedded browser SDK |
-| `GET` | `/api/v1/meta` | None | Public feature metadata; currently only the demo flag |
+| `GET` | `/api/v1/meta` | None | Public demo availability and demo-only mode flags |
 | `GET` | `/api/v1/demo/issues` | None, demo mode only | List built-in read-only demo issues |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | None, demo mode only | Read one built-in demo issue |
 | `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |

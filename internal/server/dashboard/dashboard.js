@@ -219,6 +219,7 @@
     language: detectLanguage(),
     token: "",
     demo: false,
+    demoOnly: false,
     status: "",
     limit: 25,
     cursor: "",
@@ -571,6 +572,7 @@
     elements.workspace.hidden = false;
     elements.connection.hidden = false;
     elements.demoBanner.hidden = !state.demo;
+    elements.logout.hidden = state.demoOnly;
     updateConnectionLabel();
     showMessage(elements.loginMessage, message("login.noCredentials"), false);
   }
@@ -828,8 +830,9 @@
       }
       const metadata = await response.json();
       const available = metadata.demo_mode === true;
-      elements.demo.hidden = !available;
-      if (available && demoRequested()) {
+      state.demoOnly = metadata.demo_only === true;
+      elements.demo.hidden = !available || state.demoOnly;
+      if (available && (state.demoOnly || demoRequested())) {
         await enterDemo(false);
       } else if (!available && demoRequested()) {
         showMessage(elements.loginMessage, message("errors.demoUnavailable"), true);

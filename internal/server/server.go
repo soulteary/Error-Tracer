@@ -15,6 +15,7 @@ type Server struct {
 	ready          atomic.Bool
 	store          store.Store
 	demoStore      store.Store
+	demoOnly       bool
 	projectID      string
 	ingestKey      string
 	adminTokens    []string
@@ -36,6 +37,7 @@ type Options struct {
 	RatePerMinute      int
 	RateBurst          int
 	DemoMode           bool
+	DemoOnly           bool
 	MetricsEnabled     bool
 }
 
@@ -51,6 +53,7 @@ func New(options Options) *Server {
 	}
 	server := &Server{
 		store:          options.Store,
+		demoOnly:       options.DemoOnly,
 		projectID:      options.ProjectID,
 		ingestKey:      options.IngestKey,
 		adminTokens:    adminTokens,
@@ -59,7 +62,7 @@ func New(options Options) *Server {
 		now:            time.Now,
 		newID:          randomEventID,
 	}
-	if options.DemoMode {
+	if options.DemoMode || options.DemoOnly {
 		server.demoStore = newDemoStore(server.now().UTC())
 	}
 	if options.MetricsEnabled {
@@ -78,18 +81,24 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /api/v1/meta", server.publicMetadata)
 	mux.HandleFunc("GET /api/v1/demo/issues", server.listDemoIssues)
 	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}", server.getDemoIssue)
-	mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
-	mux.HandleFunc("OPTIONS /api/v1/events", server.preflightEvent)
-	mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
-	mux.HandleFunc("OPTIONS /api/v1/events/batch", server.preflightEvent)
-	mux.HandleFunc("GET /api/v1/issues", server.listIssues)
-	mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
-	mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
+	if !options.DemoOnly {
+		mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
+		mux.HandleFunc("OPTIONS /api/v1/events", server.preflightEvent)
+		mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
+		mux.HandleFunc("OPTIONS /api/v1/events/batch", server.preflightEvent)
+		mux.HandleFunc("GET /api/v1/issues", server.listIssues)
+		mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
+		mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
+	}
 	server.handler = mux
 	if server.metrics != nil {
 		server.handler = server.metrics.middleware(mux)
 	}
-	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != "")
+	ready := options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != ""
+	if options.DemoOnly {
+		ready = server.demoStore != nil
+	}
+	server.ready.Store(ready)
 	return server
 }
 

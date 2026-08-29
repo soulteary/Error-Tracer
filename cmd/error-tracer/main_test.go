@@ -81,3 +81,12 @@ func TestPruneExpiredIssuesUsesConfiguredWindow(t *testing.T) {
 		t.Fatalf("cutoff = %s, want %s", pruner.cutoff, wantCutoff)
 	}
 }
+
+func TestDemoAddressDefaultsToLoopback(t *testing.T) {
+	if got := demoAddress(""); got != "127.0.0.1:8080" {
+		t.Fatalf("demoAddress() = %q, want loopback default", got)
+	}
+	if got := demoAddress("  :9090  "); got != ":9090" {
+		t.Fatalf("demoAddress() = %q, want trimmed override", got)
+	}
+}

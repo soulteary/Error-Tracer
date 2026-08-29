@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,13 +22,18 @@ func main() {
 }
 
 func run() int {
-	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
-		address := os.Getenv("ERROR_TRACER_ADDRESS")
-		if err := healthcheck.Check(context.Background(), address); err != nil {
-			slog.Error("health check failed", "error", err)
-			return 1
+	if len(os.Args) == 2 {
+		switch os.Args[1] {
+		case "healthcheck":
+			address := os.Getenv("ERROR_TRACER_ADDRESS")
+			if err := healthcheck.Check(context.Background(), address); err != nil {
+				slog.Error("health check failed", "error", err)
+				return 1
+			}
+			return 0
+		case "demo":
+			return runDemo()
 		}
-		return 0
 	}
 
 	cfg, err := config.FromEnvironment()
@@ -59,8 +65,35 @@ func run() int {
 		MetricsEnabled:     cfg.MetricsEnabled,
 	})
 
+	return serve(app, cfg.Address, cfg.ShutdownTimeout, func(ctx context.Context) func() {
+		return startRetention(ctx, issueStore, cfg.ProjectID, cfg.RetentionDays)
+	}, false)
+}
+
+func runDemo() int {
+	address := demoAddress(os.Getenv("ERROR_TRACER_ADDRESS"))
+	app := appserver.New(appserver.Options{DemoOnly: true})
+	return serve(app, address, 10*time.Second, nil, true)
+}
+
+func demoAddress(value string) string {
+	if address := strings.TrimSpace(value); address != "" {
+		return address
+	}
+	return "127.0.0.1:8080"
+}
+
+type backgroundStarter func(context.Context) func()
+
+func serve(
+	app *appserver.Server,
+	address string,
+	shutdownTimeout time.Duration,
+	startBackground backgroundStarter,
+	demoOnly bool,
+) int {
 	httpServer := &http.Server{
-		Addr:              cfg.Address,
+		Addr:              address,
 		Handler:           app.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
@@ -70,20 +103,23 @@ func run() int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	stopRetention := startRetention(ctx, issueStore, cfg.ProjectID, cfg.RetentionDays)
-	defer stopRetention()
+	stopBackground := func() {}
+	if startBackground != nil {
+		stopBackground = startBackground(ctx)
+	}
+	defer stopBackground()
 
 	shutdownDone := make(chan struct{})
 	go func() {
 		defer close(shutdownDone)
 		<-ctx.Done()
 		app.SetReady(false)
-		if err := stopHTTPServer(httpServer, cfg.ShutdownTimeout); err != nil {
+		if err := stopHTTPServer(httpServer, shutdownTimeout); err != nil {
 			slog.Error("graceful shutdown failed", "error", err)
 		}
 	}()
 
-	slog.Info("starting Error-Tracer", "address", cfg.Address)
+	slog.Info("starting Error-Tracer", "address", address, "demo_only", demoOnly)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped unexpectedly", "error", err)
 		return 1

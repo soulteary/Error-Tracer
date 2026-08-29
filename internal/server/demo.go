@@ -15,6 +15,7 @@ const demoProjectID = "error-tracer-demo"
 
 type publicMetadataResponse struct {
 	DemoMode bool `json:"demo_mode"`
+	DemoOnly bool `json:"demo_only,omitempty"`
 }
 
 type demoFixture struct {
@@ -26,7 +27,10 @@ type demoFixture struct {
 }
 
 func (s *Server) publicMetadata(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, publicMetadataResponse{DemoMode: s.demoStore != nil})
+	writeJSON(w, http.StatusOK, publicMetadataResponse{
+		DemoMode: s.demoStore != nil,
+		DemoOnly: s.demoOnly,
+	})
 }
 
 func (s *Server) listDemoIssues(w http.ResponseWriter, request *http.Request) {
