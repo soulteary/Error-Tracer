@@ -47,11 +47,11 @@ func FromEnvironment() (Config, error) {
 	}
 	ingestKey := strings.TrimSpace(os.Getenv("ERROR_TRACER_INGEST_KEY"))
 	if len(ingestKey) < 16 {
-		return Config{}, errors.New("ERROR_TRACER_INGEST_KEY must contain at least 16 characters")
+		return Config{}, errors.New("ERROR_TRACER_INGEST_KEY must contain at least 16 bytes")
 	}
 	adminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN"))
 	if len(adminToken) < 24 {
-		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 characters")
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes")
 	}
 	allowedOrigins, err := parseOrigins(os.Getenv("ERROR_TRACER_ALLOWED_ORIGINS"))
 	if err != nil {

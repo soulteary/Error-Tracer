@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -79,8 +80,9 @@ func TestFromEnvironmentRequiresIngestKey(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "short")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
 
-	if _, err := FromEnvironment(); err == nil {
-		t.Fatal("FromEnvironment() error = nil, want invalid ingest key error")
+	_, err := FromEnvironment()
+	if err == nil || err.Error() != "ERROR_TRACER_INGEST_KEY must contain at least 16 bytes" {
+		t.Fatalf("FromEnvironment() error = %v, want ingest key byte-length error", err)
 	}
 }
 
@@ -88,8 +90,22 @@ func TestFromEnvironmentRequiresAdminToken(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "short")
 
-	if _, err := FromEnvironment(); err == nil {
-		t.Fatal("FromEnvironment() error = nil, want invalid admin token error")
+	_, err := FromEnvironment()
+	if err == nil || err.Error() != "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes" {
+		t.Fatalf("FromEnvironment() error = %v, want admin token byte-length error", err)
+	}
+}
+
+func TestFromEnvironmentCountsCredentialBytes(t *testing.T) {
+	t.Setenv("ERROR_TRACER_INGEST_KEY", strings.Repeat("é", 8))
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", strings.Repeat("é", 12))
+
+	cfg, err := FromEnvironment()
+	if err != nil {
+		t.Fatalf("FromEnvironment() error = %v", err)
+	}
+	if len(cfg.IngestKey) != 16 || len(cfg.AdminToken) != 24 {
+		t.Fatalf("credential lengths = %d and %d bytes, want 16 and 24", len(cfg.IngestKey), len(cfg.AdminToken))
 	}
 }
 
