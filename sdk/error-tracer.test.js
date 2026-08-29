@@ -21,6 +21,7 @@ test("validates client options", () => {
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, maxEventsPerMinute: 1001 }), /maxEventsPerMinute/);
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, beforeSend: true }), /beforeSend/);
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, transport: true }), /transport/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, autoCapture: "yes" }), /autoCapture/);
 
   assert.ok(ErrorTracer.init({
     projectKey: "界".repeat(6),
@@ -263,6 +264,103 @@ test("capture contains extension and transport failures", async () => {
   assert.equal(await testClient().capture(hostile), false);
 });
 
+test("automatically captures runtime, resource, and rejection failures", async () => {
+  const events = [];
+  const runtime = fakeRuntime();
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    random: () => 0,
+    clock: () => FIXED_TIME,
+    transport(_body, payload) {
+      events.push(payload.event);
+      return true;
+    },
+  });
+
+  assert.equal(client.installed, true);
+  runtime.dispatch("error", {
+    target: runtime,
+    error: Object.assign(new Error("runtime boom"), { stack: "Error: runtime boom\n at app.js:7:9" }),
+    message: "runtime boom",
+    filename: "https://app.example/app.js?build=1",
+    lineno: 7,
+    colno: 9,
+  });
+  runtime.dispatch("error", {
+    target: {
+      tagName: "SCRIPT",
+      currentSrc: "https://cdn.example/missing.js?token=secret#fragment",
+    },
+  });
+  runtime.dispatch("unhandledrejection", {
+    reason: Object.assign(new Error("promise boom"), { stack: "Error: promise boom\n at promise.js:2:1" }),
+  });
+  await eventLoopTurn();
+
+  assert.equal(events.length, 3);
+  assert.deepEqual(events.map((event) => event.kind), [
+    "error",
+    "resource_error",
+    "unhandled_rejection",
+  ]);
+  assert.equal(events[0].source_url, "https://app.example/app.js");
+  assert.equal(events[0].line, 7);
+  assert.equal(events[0].column, 9);
+  assert.equal(events[1].message, "Failed to load script");
+  assert.equal(events[1].source_url, "https://cdn.example/missing.js");
+  assert.equal(events[2].message, "promise boom");
+});
+
+test("automatic capture can be installed and destroyed idempotently", () => {
+  const runtime = fakeRuntime();
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    autoCapture: false,
+    transport() {
+      return true;
+    },
+  });
+
+  assert.equal(client.installed, false);
+  assert.equal(runtime.listenerCount("error"), 0);
+  assert.equal(client.install(), true);
+  assert.equal(client.install(), false);
+  assert.equal(runtime.listenerCount("error"), 1);
+  assert.equal(runtime.listenerCount("unhandledrejection"), 1);
+
+  client.destroy();
+  client.destroy();
+  assert.equal(client.installed, false);
+  assert.equal(runtime.listenerCount("error"), 0);
+  assert.equal(runtime.listenerCount("unhandledrejection"), 0);
+});
+
+test("serializes plain-object rejection reasons", async () => {
+  const events = [];
+  const runtime = fakeRuntime();
+  ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    random: () => 0,
+    clock: () => FIXED_TIME,
+    transport(_body, payload) {
+      events.push(payload.event);
+      return true;
+    },
+  });
+
+  runtime.dispatch("unhandledrejection", {
+    reason: { code: "E_CHECKOUT", retryable: false },
+  });
+  await eventLoopTurn();
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].kind, "unhandled_rejection");
+  assert.equal(events[0].message, '{"code":"E_CHECKOUT","retryable":false}');
+});
+
 function testClient(overrides) {
   return ErrorTracer.init({
     projectKey: PROJECT_KEY,
@@ -274,4 +372,34 @@ function testClient(overrides) {
     },
     ...overrides,
   });
+}
+
+function fakeRuntime() {
+  const listeners = new Map();
+  return {
+    location: { href: "https://app.example/page?secret=1#fragment" },
+    addEventListener(type, listener) {
+      const registered = listeners.get(type) || new Set();
+      registered.add(listener);
+      listeners.set(type, registered);
+    },
+    removeEventListener(type, listener) {
+      const registered = listeners.get(type);
+      if (registered) {
+        registered.delete(listener);
+      }
+    },
+    dispatch(type, event) {
+      for (const listener of listeners.get(type) || []) {
+        listener(event);
+      }
+    },
+    listenerCount(type) {
+      return (listeners.get(type) || new Set()).size;
+    },
+  };
+}
+
+function eventLoopTurn() {
+  return new Promise((resolve) => setImmediate(resolve));
 }

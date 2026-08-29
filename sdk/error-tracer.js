@@ -57,6 +57,9 @@
       if (options.transport !== undefined && typeof options.transport !== "function") {
         throw new TypeError("ErrorTracer transport must be a function");
       }
+      if (options.autoCapture !== undefined && typeof options.autoCapture !== "boolean") {
+        throw new TypeError("ErrorTracer autoCapture must be a boolean");
+      }
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);
       this.environment = truncateUTF8(cleanString(options.environment), LIMITS.environment);
@@ -66,6 +69,86 @@
       this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
       this.sentAt = [];
       this.transport = options.transport || defaultTransport(this.runtime, this.endpoint);
+      this.installed = false;
+      this.errorListener = (event) => this.captureWindowError(event);
+      this.rejectionListener = (event) => this.captureUnhandledRejection(event);
+      if (options.autoCapture !== false) {
+        this.install();
+      }
+    }
+
+    install() {
+      if (this.installed || !this.runtime) {
+        return false;
+      }
+      if (typeof this.runtime.addEventListener !== "function" ||
+          typeof this.runtime.removeEventListener !== "function") {
+        return false;
+      }
+      this.runtime.addEventListener("error", this.errorListener, true);
+      this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
+      this.installed = true;
+      return true;
+    }
+
+    destroy() {
+      if (!this.installed) {
+        return;
+      }
+      if (this.runtime && typeof this.runtime.removeEventListener === "function") {
+        this.runtime.removeEventListener("error", this.errorListener, true);
+        this.runtime.removeEventListener("unhandledrejection", this.rejectionListener, false);
+      }
+      this.installed = false;
+    }
+
+    captureWindowError(errorEvent) {
+      try {
+        const target = safeRead(errorEvent, "target");
+        if (target && target !== this.runtime) {
+          const sourceURL = safeRead(target, "currentSrc") ||
+            safeRead(target, "src") || safeRead(target, "href");
+          const tagName = cleanString(safeRead(target, "tagName")).toLowerCase() || "resource";
+          this.settle(this.capture({
+            kind: "resource_error",
+            message: `Failed to load ${tagName}`,
+            source_url: sourceURL,
+          }));
+          return;
+        }
+
+        const error = safeRead(errorEvent, "error");
+        const details = errorDetails(error);
+        this.settle(this.capture({
+          kind: "error",
+          message: cleanString(safeRead(errorEvent, "message")) || details.message,
+          stack: details.stack,
+          source_url: safeRead(errorEvent, "filename"),
+          line: safeRead(errorEvent, "lineno"),
+          column: safeRead(errorEvent, "colno"),
+        }));
+      } catch (_) {
+        // Browser error handlers must never throw into the host page.
+      }
+    }
+
+    captureUnhandledRejection(rejectionEvent) {
+      try {
+        const details = rejectionDetails(safeRead(rejectionEvent, "reason"));
+        this.settle(this.capture({
+          kind: "unhandled_rejection",
+          message: details.message,
+          stack: details.stack,
+        }));
+      } catch (_) {
+        // Browser rejection handlers must never create another rejection.
+      }
+    }
+
+    settle(result) {
+      if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+      }
     }
 
     captureException(error, context) {
@@ -250,6 +333,22 @@
       message,
       stack: cleanString(safeRead(error, "stack")),
     };
+  }
+
+  function rejectionDetails(reason) {
+    const details = errorDetails(reason);
+    if (details.message !== "[object Object]") {
+      return details;
+    }
+    try {
+      const serialized = JSON.stringify(reason);
+      if (serialized) {
+        details.message = serialized;
+      }
+    } catch (_) {
+      // Keep the safe string representation for circular values.
+    }
+    return details;
   }
 
   function normalizeTags(input) {
