@@ -1,0 +1,14 @@
+{
+  "name": "error-tracer",
+  "version": "2.0.0-dev",
+  "private": true,
+  "description": "A small self-hosted browser error collector",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test sdk/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
