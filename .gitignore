@@ -1,6 +1,16 @@
 /*.iml
 .env
+
+# Local SQLite databases and their journal/WAL sidecars.
 *.db
-*.db-journal
-*.db-shm
-*.db-wal
+*.db-*
+*.db3
+*.db3-*
+*.s3db
+*.s3db-*
+*.sl3
+*.sl3-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
