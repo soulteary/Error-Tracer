@@ -5,10 +5,13 @@
 
   const elements = {
     connection: document.querySelector("#connection-status"),
+    connectionLabel: document.querySelector("#connection-label"),
     loginPanel: document.querySelector("#login-panel"),
     tokenForm: document.querySelector("#token-form"),
     tokenInput: document.querySelector("#admin-token"),
     loginMessage: document.querySelector("#login-message"),
+    demo: document.querySelector("#demo-button"),
+    demoBanner: document.querySelector("#demo-banner"),
     workspace: document.querySelector("#workspace"),
     workspaceMessage: document.querySelector("#workspace-message"),
     refresh: document.querySelector("#refresh-button"),
@@ -36,6 +39,7 @@
 
   const state = {
     token: "",
+    demo: false,
     status: "",
     limit: 25,
     offset: 0,
@@ -69,6 +73,22 @@
       state.token = "";
       showMessage(elements.loginMessage, readableError(error), true);
       elements.tokenInput.focus();
+    } finally {
+      setLoginBusy(false);
+    }
+  });
+
+  elements.demo.addEventListener("click", async () => {
+    state.demo = true;
+    state.offset = 0;
+    setLoginBusy(true);
+    showMessage(elements.loginMessage, "Loading the read-only demo…", false);
+    try {
+      await loadIssues();
+      showWorkspace();
+    } catch (error) {
+      state.demo = false;
+      showMessage(elements.loginMessage, readableError(error), true);
     } finally {
       setLoginBusy(false);
     }
@@ -121,7 +141,7 @@
   });
 
   async function loadIssues() {
-    if (state.loading || !state.token) {
+    if (state.loading || (!state.token && !state.demo)) {
       return;
     }
     state.loading = true;
@@ -166,6 +186,10 @@
     if (!state.selected || state.selected.status === status) {
       return;
     }
+    if (state.demo) {
+      showMessage(elements.workspaceMessage, "The demo is read-only. Connect with an admin token to change issue status.", false);
+      return;
+    }
     setStatusButtonsBusy(true);
     try {
       const result = await requestJSON(
@@ -184,15 +208,21 @@
     options = options || {};
     const headers = {
       Accept: "application/json",
-      Authorization: `Bearer ${state.token}`,
     };
+    if (!state.demo) {
+      headers.Authorization = `Bearer ${state.token}`;
+    }
     if (options.body) {
       headers["Content-Type"] = "application/json";
     }
 
+    const requestPath = state.demo
+      ? path.replace(/^\/api\/v1\/issues/, "/api/v1/demo/issues")
+      : path;
+
     let response;
     try {
-      response = await fetch(path, {
+      response = await fetch(requestPath, {
         method: options.method || "GET",
         body: options.body,
         credentials: "omit",
@@ -203,7 +233,7 @@
     }
 
     const payload = await response.json().catch(() => ({}));
-    if (response.status === 401) {
+    if (response.status === 401 && !state.demo) {
       disconnect("The admin token was rejected or has changed.");
       throw new Error("The admin token was rejected.");
     }
@@ -293,6 +323,7 @@
     for (const button of elements.statusActions.querySelectorAll("[data-status]")) {
       button.setAttribute("aria-pressed", String(button.dataset.status === issue.status));
     }
+    setStatusButtonsBusy(false);
   }
 
   function appendContext(label, value) {
@@ -322,16 +353,21 @@
     elements.loginPanel.hidden = true;
     elements.workspace.hidden = false;
     elements.connection.hidden = false;
+    elements.demoBanner.hidden = !state.demo;
+    elements.connectionLabel.textContent = state.demo ? "Read-only demo" : "Connected";
     showMessage(elements.loginMessage, "No credentials are stored by the dashboard.", false);
   }
 
   function disconnect(message) {
     state.token = "";
+    state.demo = false;
     state.page = null;
     state.selected = null;
     closeIssueDialog();
     elements.workspace.hidden = true;
     elements.connection.hidden = true;
+    elements.demoBanner.hidden = true;
+    elements.connectionLabel.textContent = "Connected";
     elements.loginPanel.hidden = false;
     elements.tokenInput.value = "";
     showMessage(elements.loginMessage, message, false);
@@ -357,7 +393,9 @@
 
   function setLoginBusy(busy) {
     elements.tokenInput.disabled = busy;
-    elements.tokenForm.querySelector("button").disabled = busy;
+    for (const button of elements.tokenForm.querySelectorAll("button")) {
+      button.disabled = busy;
+    }
   }
 
   function setWorkspaceBusy(busy) {
@@ -370,7 +408,7 @@
 
   function setStatusButtonsBusy(busy) {
     for (const button of elements.statusActions.querySelectorAll("button")) {
-      button.disabled = busy;
+      button.disabled = busy || state.demo;
     }
   }
 
@@ -428,4 +466,22 @@
   function readableError(error) {
     return error && error.message ? error.message : "Something went wrong. Try again.";
   }
+
+  async function discoverDemo() {
+    try {
+      const response = await fetch("/api/v1/meta", {
+        credentials: "omit",
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        return;
+      }
+      const metadata = await response.json();
+      elements.demo.hidden = metadata.demo_mode !== true;
+    } catch (_) {
+      elements.demo.hidden = true;
+    }
+  }
+
+  discoverDemo();
 })();

@@ -24,7 +24,7 @@
       </a>
       <div class="connection" id="connection-status" hidden>
         <span class="pulse" aria-hidden="true"></span>
-        <span>Connected</span>
+        <span id="connection-label">Connected</span>
       </div>
     </header>
 
@@ -42,6 +42,7 @@
                  placeholder="Paste a 24+ character token">
           <button class="button button-primary" type="submit">Connect</button>
         </div>
+        <button class="button button-demo" id="demo-button" type="button" hidden>Explore the read-only demo</button>
         <p class="form-note" id="login-message" role="status">No credentials are stored by the dashboard.</p>
       </form>
     </section>
@@ -57,6 +58,11 @@
           <button class="button button-quiet" id="logout-button" type="button">Disconnect</button>
         </div>
       </div>
+
+      <aside class="demo-banner" id="demo-banner" hidden>
+        <strong>Demo workspace</strong>
+        <span>Built-in sample events only. The live database and management API remain private.</span>
+      </aside>
 
       <section class="metrics" aria-label="Current page summary">
         <article>

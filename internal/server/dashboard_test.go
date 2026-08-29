@@ -20,6 +20,8 @@ func TestDashboardIndex(t *testing.T) {
 	for _, marker := range []string{
 		"<title>Error-Tracer</title>",
 		`id="token-form"`,
+		`id="demo-button"`,
+		`id="demo-banner"`,
 		`id="issue-list"`,
 		`src="/assets/dashboard.js"`,
 		`href="/assets/dashboard.css"`,
@@ -116,6 +118,11 @@ func TestDashboardScriptAvoidsCredentialPersistenceAndHTMLInjection(t *testing.T
 	}
 	if !strings.Contains(dashboardScript.body, "textContent") {
 		t.Fatal("dashboard script does not use textContent for rendering")
+	}
+	for _, marker := range []string{"/api/v1/meta", "/api/v1/demo/issues"} {
+		if !strings.Contains(dashboardScript.body, marker) {
+			t.Fatalf("dashboard script does not contain demo marker %q", marker)
+		}
 	}
 }
 

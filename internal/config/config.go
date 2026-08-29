@@ -29,6 +29,7 @@ type Config struct {
 	AllowedOrigins  []string
 	RatePerMinute   int
 	RateBurst       int
+	DemoMode        bool
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -65,6 +66,10 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	demoMode, err := strictBoolean("ERROR_TRACER_DEMO_MODE", false)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Address:         address,
@@ -76,7 +81,23 @@ func FromEnvironment() (Config, error) {
 		AllowedOrigins:  allowedOrigins,
 		RatePerMinute:   ratePerMinute,
 		RateBurst:       rateBurst,
+		DemoMode:        demoMode,
 	}, nil
+}
+
+func strictBoolean(name string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	switch strings.ToLower(raw) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
 }
 
 func positiveInteger(name string, fallback, maximum int) (int, error) {

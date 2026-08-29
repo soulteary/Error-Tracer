@@ -50,6 +50,7 @@ func main() {
 		AllowedOrigins: cfg.AllowedOrigins,
 		RatePerMinute:  cfg.RatePerMinute,
 		RateBurst:      cfg.RateBurst,
+		DemoMode:       cfg.DemoMode,
 	})
 
 	httpServer := &http.Server{
