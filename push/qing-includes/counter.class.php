@@ -53,10 +53,13 @@ class Counter extends Core
         $DB_URL = $DB->escapeSQL($_REQUEST['url']);
         $DB_LINE = $DB->escapeSQL($_REQUEST['line']);
 
-        $browser = new Browser();
-        $type = $browser->getBrowser();
-        $version = $browser->getVersion();
-        $platform =  $browser->getPlatform();
+        // Browser detection previously depended on a bundled GPL-licensed
+        // implementation. The legacy release is preserved by the
+        // v1.0.0-legacy tag; the default branch no longer performs that
+        // detection while the collector is being rewritten.
+        $type = 'unknown';
+        $version = 'unknown';
+        $platform = 'unknown';
         $sql = "SELECT `id`, `type`, `version` FROM `browser` WHERE `type` = '$type' AND `version` = '$version' LIMIT 0, 1";
         $result = $DB->query($sql);
         $exec = $DB->num_rows($result);
