@@ -1,0 +1,248 @@
+# Error-Tracer
+
+[English](README.md)
+
+Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服务使用 Go
+编写，将聚合后的问题存储在 SQLite 中，并提供零依赖浏览器 SDK 和内嵌的
+问题处理 Dashboard。
+
+2013 年的 PHP/MySQL 原始实现保存在
+[`v1.0.0-legacy`](https://github.com/soulteary/Error-Tracer/tree/v1.0.0-legacy)
+标签中，不属于当前运行时。
+
+## 功能
+
+- 捕获浏览器运行时错误、未处理的 Promise 拒绝和资源加载失败。
+- 持久化之前统一规范事件，并移除 URL 中的凭据、查询参数和片段。
+- 使用稳定的 SHA-256 指纹聚合同类事件。
+- 使用 SQLite 存储问题聚合数据。
+- 在单个事务中原子写入最多 100 个事件，任一步失败都会回滚整批数据。
+- 支持 `open`、`resolved` 和 `ignored` 三种问题状态。
+- 提供带鉴权的 JSON API 和内嵌 Dashboard。
+- Dashboard 支持 English / 简体中文，且不依赖浏览器存储。
+- 提供显式开启、完全隔离真实数据库的公开只读演示模式。
+- 限制请求体大小、浏览器来源、单个对等端速率，并使用常量时间比较凭据。
+- 可构建为单个静态二进制，也可在非 root、只读容器中运行。
+- 自带数据库/程序基准测试和有安全边界的 HTTP 压力测试命令。
+
+## 使用 Docker Compose 快速启动
+
+复制环境变量模板：
+
+```sh
+cp .env.example .env
+```
+
+生成两个彼此独立的随机凭据，并写入 `.env`：
+
+```sh
+openssl rand -hex 16
+openssl rand -hex 24
+```
+
+第一个值可用于 `ERROR_TRACER_INGEST_KEY`，第二个值可用于
+`ERROR_TRACER_ADMIN_TOKEN`。将 `ERROR_TRACER_ALLOWED_ORIGINS` 设置为每个
+允许提交事件的浏览器应用的精确来源，例如 `https://app.example.com`。
+
+启动服务：
+
+```sh
+docker compose up --build -d
+curl --fail http://localhost:8080/readyz
+```
+
+打开 <http://localhost:8080/>，输入管理员令牌连接。Dashboard 只把令牌保留
+在当前标签页的内存中。使用页面上的语言选择器，或直接打开
+`http://localhost:8080/?lang=zh-CN` 切换到简体中文；语言选择只体现在 URL
+中，不会写入浏览器存储。
+
+Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
+
+如果还没有真实事件，可参考[演示模式](docs/demo.md)开启内置只读样例。
+
+## 浏览器 SDK
+
+服务在 `/assets/error-tracer.js` 提供内嵌 SDK：
+
+```html
+<script src="https://errors.example.com/assets/error-tracer.js"></script>
+<script>
+  const tracer = ErrorTracer.init({
+    endpoint: "https://errors.example.com/api/v1/events",
+    projectKey: "替换为采集密钥",
+    release: "web@2026.08.29",
+    environment: "production",
+    tags: { region: "ap-southeast-1" },
+  });
+
+  tracer.captureMessage("checkout started");
+</script>
+```
+
+默认自动捕获错误。如果只需要手动上报，可设置 `autoCapture: false`。客户端还
+支持 `sampleRate`、`maxEventsPerMinute`、`beforeSend` 和自定义 `transport`。
+
+## 采集 API
+
+### 单个事件
+
+`POST /api/v1/events` 接受 JSON，也接受包含 JSON 的 `text/plain`，以便 SDK
+使用 `navigator.sendBeacon`：
+
+```json
+{
+  "project_key": "替换为采集密钥",
+  "event": {
+    "kind": "error",
+    "message": "TypeError: value is not a function",
+    "stack": "TypeError: value is not a function\n    at checkout (app.js:10:2)",
+    "source_url": "https://app.example.com/app.js?build=42",
+    "page_url": "https://app.example.com/checkout?session=secret",
+    "line": 10,
+    "column": 2,
+    "occurred_at": "2026-08-29T14:00:00Z",
+    "release": "web@2026.08.29",
+    "environment": "production",
+    "tags": {
+      "feature": "checkout"
+    }
+  }
+}
+```
+
+服务端会覆盖 `id`、`received_at` 和 `user_agent`。成功时返回
+`202 Accepted`，以及服务端生成的事件 ID 和问题指纹。
+
+### 原子批量写入
+
+`POST /api/v1/events/batch` 接受 1–100 个事件，解码后的请求体最大为
+1 MiB。所有事件都会在修改 SQLite 之前完成规范化和校验，之后的全部
+UPSERT 在同一个事务中执行：
+
+```json
+{
+  "project_key": "替换为采集密钥",
+  "events": [
+    {
+      "kind": "error",
+      "message": "first failure"
+    },
+    {
+      "kind": "unhandled_rejection",
+      "message": "second failure"
+    }
+  ]
+}
+```
+
+响应会按输入顺序返回每个事件的服务端 ID 和指纹。如果校验、UPSERT、
+事务内读回或提交失败，整批数据都不会持久化。
+
+## 问题 API
+
+问题接口要求管理员令牌：
+
+```http
+Authorization: Bearer 替换为管理员令牌
+```
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/v1/issues?limit=50&offset=0` | 按最新出现时间列出问题 |
+| `GET` | `/api/v1/issues?status=open` | 按 `open`、`resolved` 或 `ignored` 筛选 |
+| `GET` | `/api/v1/issues/{fingerprint}` | 读取单个问题 |
+| `PATCH` | `/api/v1/issues/{fingerprint}` | 修改问题状态 |
+
+状态修改请求体：
+
+```json
+{
+  "status": "resolved"
+}
+```
+
+每页最多返回 100 个问题，超过 100,000 的偏移量会被拒绝。
+
+## 服务端点
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| `GET` | `/` | 无 | Dashboard 外壳；读取真实数据仍需管理员令牌 |
+| `GET` | `/assets/error-tracer.js` | 无 | 内嵌浏览器 SDK |
+| `GET` | `/api/v1/meta` | 无 | 公开功能元数据，目前仅包含演示开关 |
+| `GET` | `/api/v1/demo/issues` | 无，仅演示模式 | 列出内置只读演示问题 |
+| `GET` | `/api/v1/demo/issues/{fingerprint}` | 无，仅演示模式 | 读取一个内置演示问题 |
+| `POST` | `/api/v1/events` | 请求体中的采集密钥 | 提交单个事件 |
+| `POST` | `/api/v1/events/batch` | 请求体中的采集密钥 | 原子提交一批事件 |
+| `GET` | `/api/v1/issues` | 管理员 Bearer 令牌 | 列出问题 |
+| `GET` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 读取问题 |
+| `PATCH` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 更新状态 |
+| `GET` | `/healthz` | 无 | 进程存活状态 |
+| `GET` | `/readyz` | 无 | 是否可以接收新工作 |
+
+## 配置
+
+| 变量 | 必需 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `ERROR_TRACER_ADDRESS` | 否 | `:8080` | HTTP 监听地址 |
+| `ERROR_TRACER_DATABASE_PATH` | 否 | `error-tracer.db` | SQLite 数据库路径 |
+| `ERROR_TRACER_PROJECT_ID` | 否 | `default` | 当前进程拥有的项目命名空间 |
+| `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
+| `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
+| `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
+| `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟允许的采集请求数 |
+| `ERROR_TRACER_RATE_BURST` | 否 | `30` | 令牌桶最大突发量 |
+| `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
+
+`ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。来源
+白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
+客户端仍可提交事件。
+
+## 本地开发
+
+模块声明 Go 1.27。仅运行浏览器 SDK 测试时需要 Node.js 22 或更高版本。
+
+```sh
+go mod verify
+go vet ./...
+go test ./...
+go test -race ./...
+npm test
+```
+
+从源码运行：
+
+```sh
+ERROR_TRACER_INGEST_KEY=development-key-1 \
+ERROR_TRACER_ADMIN_TOKEN=development-admin-token-1 \
+go run ./cmd/error-tracer
+```
+
+构建静态服务二进制：
+
+```sh
+CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
+```
+
+基准和压力测试不会随普通单测自动运行。完整命令、指标解释和安全限制见
+[性能与压力测试](docs/performance.md)。
+
+## 文档
+
+- [演示模式及其安全边界](docs/demo.md)
+- [性能基准与压力测试](docs/performance.md)
+- [English README](README.md)
+
+## 部署注意事项
+
+- 采集密钥和管理员令牌必须独立、随机生成。
+- 接收网络中的浏览器流量前，应将服务置于 HTTPS 之后。
+- 浏览器来源必须精确配置；系统有意拒绝通配符。
+- 限流器使用直接 TCP 对等端，不信任转发地址请求头。
+- 将 SQLite 路径或 `/data` 卷持久化到容器生命周期之外。
+- 优雅关闭 HTTP 服务前，进程会先将自身标记为未就绪。
+- 不需要公开演示时，保持 `ERROR_TRACER_DEMO_MODE=false`。
+
+## 许可证
+
+Error-Tracer 使用 [Apache License 2.0](LICENSE) 许可证。
