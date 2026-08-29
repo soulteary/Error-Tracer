@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0f19">
+  <title>Error-Tracer</title>
+  <link rel="stylesheet" href="/assets/dashboard.css">
+  <script src="/assets/dashboard.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+
+  <main class="shell">
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Error-Tracer home">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>
+          <strong>Error-Tracer</strong>
+          <small>browser failure observatory</small>
+        </span>
+      </a>
+      <div class="connection" id="connection-status" hidden>
+        <span class="pulse" aria-hidden="true"></span>
+        <span>Connected</span>
+      </div>
+    </header>
+
+    <section class="login-panel" id="login-panel" aria-labelledby="login-title">
+      <div class="login-copy">
+        <p class="eyebrow">Private control plane</p>
+        <h1 id="login-title">See the failures your users cannot explain.</h1>
+        <p>Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.</p>
+      </div>
+      <form class="token-form" id="token-form">
+        <label for="admin-token">Admin token</label>
+        <div class="token-row">
+          <input id="admin-token" name="admin-token" type="password" required minlength="24"
+                 autocomplete="off" autocapitalize="none" spellcheck="false"
+                 placeholder="Paste a 24+ character token">
+          <button class="button button-primary" type="submit">Connect</button>
+        </div>
+        <p class="form-note" id="login-message" role="status">No credentials are stored by the dashboard.</p>
+      </form>
+    </section>
+
+    <section class="workspace" id="workspace" hidden aria-label="Issue dashboard">
+      <div class="workspace-heading">
+        <div>
+          <p class="eyebrow">Issue stream</p>
+          <h1>Failures, grouped by root signal.</h1>
+        </div>
+        <div class="header-actions">
+          <button class="button button-quiet" id="refresh-button" type="button">Refresh</button>
+          <button class="button button-quiet" id="logout-button" type="button">Disconnect</button>
+        </div>
+      </div>
+
+      <section class="metrics" aria-label="Current page summary">
+        <article>
+          <span>Matching issues</span>
+          <strong id="metric-total">—</strong>
+        </article>
+        <article>
+          <span>Page occurrences</span>
+          <strong id="metric-occurrences">—</strong>
+        </article>
+        <article>
+          <span>Latest signal</span>
+          <strong id="metric-latest">—</strong>
+        </article>
+      </section>
+
+      <section class="issue-panel" aria-labelledby="issues-title">
+        <div class="panel-toolbar">
+          <div>
+            <h2 id="issues-title">Issues</h2>
+            <p id="result-copy">Waiting for data</p>
+          </div>
+          <label class="filter">
+            <span>Status</span>
+            <select id="status-filter">
+              <option value="">All</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+              <option value="ignored">Ignored</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Issue</th>
+                <th scope="col">Status</th>
+                <th scope="col">Events</th>
+                <th scope="col">Last seen</th>
+              </tr>
+            </thead>
+            <tbody id="issue-list"></tbody>
+          </table>
+          <div class="empty-state" id="empty-state" hidden>
+            <span aria-hidden="true">✓</span>
+            <strong>No matching issues</strong>
+            <p>The quiet is real—for this filter, at least.</p>
+          </div>
+        </div>
+
+        <footer class="pagination">
+          <span id="page-copy">Page 1</span>
+          <div>
+            <button class="button button-quiet" id="previous-button" type="button">Previous</button>
+            <button class="button button-quiet" id="next-button" type="button">Next</button>
+          </div>
+        </footer>
+      </section>
+      <p class="workspace-message" id="workspace-message" role="status"></p>
+    </section>
+  </main>
+
+  <dialog class="issue-dialog" id="issue-dialog" aria-labelledby="detail-title">
+    <div class="dialog-shell">
+      <header>
+        <div>
+          <p class="eyebrow" id="detail-kind">Issue detail</p>
+          <h2 id="detail-title">Loading…</h2>
+        </div>
+        <button class="icon-button" id="close-dialog" type="button" aria-label="Close issue detail">×</button>
+      </header>
+      <div class="detail-meta" id="detail-meta"></div>
+      <section class="detail-section">
+        <h3>Location</h3>
+        <p class="code-line" id="detail-location">—</p>
+      </section>
+      <section class="detail-section">
+        <h3>Latest stack</h3>
+        <pre id="detail-stack">No stack was captured.</pre>
+      </section>
+      <section class="detail-section">
+        <h3>Context</h3>
+        <dl class="context-grid" id="detail-context"></dl>
+      </section>
+      <footer>
+        <span>Set status</span>
+        <div class="status-actions" id="status-actions">
+          <button class="status-button" data-status="open" type="button">Open</button>
+          <button class="status-button" data-status="resolved" type="button">Resolved</button>
+          <button class="status-button" data-status="ignored" type="button">Ignored</button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+</body>
+</html>
