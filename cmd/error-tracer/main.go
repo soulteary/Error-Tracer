@@ -12,11 +12,20 @@ import (
 
 	"github.com/soulteary/Error-Tracer/internal/config"
 	appserver "github.com/soulteary/Error-Tracer/internal/server"
+	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
 func main() {
-	cfg := config.FromEnvironment()
-	app := appserver.New()
+	cfg, err := config.FromEnvironment()
+	if err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+	app := appserver.New(appserver.Options{
+		Store:     store.NewMemory(),
+		ProjectID: cfg.ProjectID,
+		IngestKey: cfg.IngestKey,
+	})
 
 	httpServer := &http.Server{
 		Addr:              cfg.Address,

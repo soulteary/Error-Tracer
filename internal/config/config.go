@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -15,17 +16,29 @@ const (
 type Config struct {
 	Address         string
 	ShutdownTimeout time.Duration
+	ProjectID       string
+	IngestKey       string
 }
 
 // FromEnvironment loads configuration without mutating process state.
-func FromEnvironment() Config {
+func FromEnvironment() (Config, error) {
 	address := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADDRESS"))
 	if address == "" {
 		address = defaultAddress
+	}
+	projectID := strings.TrimSpace(os.Getenv("ERROR_TRACER_PROJECT_ID"))
+	if projectID == "" {
+		projectID = "default"
+	}
+	ingestKey := strings.TrimSpace(os.Getenv("ERROR_TRACER_INGEST_KEY"))
+	if len(ingestKey) < 16 {
+		return Config{}, errors.New("ERROR_TRACER_INGEST_KEY must contain at least 16 characters")
 	}
 
 	return Config{
 		Address:         address,
 		ShutdownTimeout: defaultShutdownTimeout,
-	}
+		ProjectID:       projectID,
+		IngestKey:       ingestKey,
+	}, nil
 }

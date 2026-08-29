@@ -4,10 +4,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
 func TestHealth(t *testing.T) {
-	app := New()
+	app := newTestServer()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
 	response := httptest.NewRecorder()
 
@@ -25,7 +27,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestReadinessTracksState(t *testing.T) {
-	app := New()
+	app := newTestServer()
 
 	assertStatus := func(want int) {
 		t.Helper()
@@ -43,7 +45,7 @@ func TestReadinessTracksState(t *testing.T) {
 }
 
 func TestHealthRejectsOtherMethods(t *testing.T) {
-	app := New()
+	app := newTestServer()
 	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
 	response := httptest.NewRecorder()
 
@@ -52,4 +54,12 @@ func TestHealthRejectsOtherMethods(t *testing.T) {
 	if response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusMethodNotAllowed)
 	}
+}
+
+func newTestServer() *Server {
+	return New(Options{
+		Store:     store.NewMemory(),
+		ProjectID: "project-a",
+		IngestKey: "0123456789abcdef",
+	})
 }
