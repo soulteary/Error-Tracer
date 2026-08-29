@@ -20,6 +20,7 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	ProjectID       string
 	IngestKey       string
+	AdminToken      string
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -40,6 +41,10 @@ func FromEnvironment() (Config, error) {
 	if len(ingestKey) < 16 {
 		return Config{}, errors.New("ERROR_TRACER_INGEST_KEY must contain at least 16 characters")
 	}
+	adminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN"))
+	if len(adminToken) < 24 {
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 characters")
+	}
 
 	return Config{
 		Address:         address,
@@ -47,5 +52,6 @@ func FromEnvironment() (Config, error) {
 		ShutdownTimeout: defaultShutdownTimeout,
 		ProjectID:       projectID,
 		IngestKey:       ingestKey,
+		AdminToken:      adminToken,
 	}, nil
 }

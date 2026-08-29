@@ -11,37 +11,42 @@ import (
 
 // Server owns the HTTP routes and service readiness state.
 type Server struct {
-	handler   http.Handler
-	ready     atomic.Bool
-	store     store.Store
-	projectID string
-	ingestKey string
-	now       func() time.Time
-	newID     func() (string, error)
+	handler    http.Handler
+	ready      atomic.Bool
+	store      store.Store
+	projectID  string
+	ingestKey  string
+	adminToken string
+	now        func() time.Time
+	newID      func() (string, error)
 }
 
 // Options provides the dependencies required by the HTTP service.
 type Options struct {
-	Store     store.Store
-	ProjectID string
-	IngestKey string
+	Store      store.Store
+	ProjectID  string
+	IngestKey  string
+	AdminToken string
 }
 
 // New creates a service with liveness and readiness endpoints.
 func New(options Options) *Server {
 	server := &Server{
-		store:     options.Store,
-		projectID: options.ProjectID,
-		ingestKey: options.IngestKey,
-		now:       time.Now,
-		newID:     randomEventID,
+		store:      options.Store,
+		projectID:  options.ProjectID,
+		ingestKey:  options.IngestKey,
+		adminToken: options.AdminToken,
+		now:        time.Now,
+		newID:      randomEventID,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
 	mux.HandleFunc("POST /api/v1/events", server.ingestEvent)
+	mux.HandleFunc("GET /api/v1/issues", server.listIssues)
+	mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
 	server.handler = mux
-	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "")
+	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != "")
 	return server
 }
 

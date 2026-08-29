@@ -10,6 +10,7 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_DATABASE_PATH", "")
 	t.Setenv("ERROR_TRACER_PROJECT_ID", "")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "development-key-1")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "development-admin-token-1")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -34,6 +35,7 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_DATABASE_PATH", " /var/lib/error-tracer/events.db ")
 	t.Setenv("ERROR_TRACER_PROJECT_ID", " project-a ")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", " 0123456789abcdefghijklmn ")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
@@ -51,12 +53,25 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	if cfg.IngestKey != "0123456789abcdef" {
 		t.Fatalf("IngestKey was not loaded")
 	}
+	if cfg.AdminToken != "0123456789abcdefghijklmn" {
+		t.Fatalf("AdminToken was not loaded")
+	}
 }
 
 func TestFromEnvironmentRequiresIngestKey(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "short")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
 
 	if _, err := FromEnvironment(); err == nil {
 		t.Fatal("FromEnvironment() error = nil, want invalid ingest key error")
+	}
+}
+
+func TestFromEnvironmentRequiresAdminToken(t *testing.T) {
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "short")
+
+	if _, err := FromEnvironment(); err == nil {
+		t.Fatal("FromEnvironment() error = nil, want invalid admin token error")
 	}
 }
