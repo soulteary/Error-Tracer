@@ -9,6 +9,12 @@ func (s *Server) ingestEventWithOrigin(w http.ResponseWriter, request *http.Requ
 	if !s.allowEventOrigin(w, request) {
 		return
 	}
+	allowed, retryAfter := s.ingestLimiter.Allow(clientAddress(request.RemoteAddr))
+	if !allowed {
+		w.Header().Set("Retry-After", retryAfterHeader(retryAfter))
+		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})
+		return
+	}
 	s.ingestEvent(w, request)
 }
 

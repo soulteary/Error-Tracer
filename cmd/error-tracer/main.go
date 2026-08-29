@@ -38,6 +38,8 @@ func main() {
 		IngestKey:      cfg.IngestKey,
 		AdminToken:     cfg.AdminToken,
 		AllowedOrigins: cfg.AllowedOrigins,
+		RatePerMinute:  cfg.RatePerMinute,
+		RateBurst:      cfg.RateBurst,
 	})
 
 	httpServer := &http.Server{
