@@ -1,10 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,6 +152,70 @@ func TestIssuesAPIRejectsUnconfiguredServer(t *testing.T) {
 	New(Options{}).Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestUpdateIssueStatus(t *testing.T) {
+	memory := store.NewMemory()
+	captured := event.Event{Kind: event.KindError, Message: "boom", ReceivedAt: time.Now().UTC()}
+	stored, err := memory.Record(context.Background(), "project-a", captured)
+	if err != nil {
+		t.Fatalf("record issue: %v", err)
+	}
+	app := New(Options{
+		Store: memory, ProjectID: "project-a", IngestKey: "0123456789abcdef", AdminToken: testAdminToken,
+	})
+	request := authorizedRequest(http.MethodPatch, "/api/v1/issues/"+stored.Fingerprint)
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	request.Body = io.NopCloser(strings.NewReader(`{"status":"resolved"}`))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	persisted, err := memory.GetIssue(context.Background(), "project-a", stored.Fingerprint)
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if persisted.Status != store.IssueStatusResolved {
+		t.Fatalf("status = %q, want %q", persisted.Status, store.IssueStatusResolved)
+	}
+}
+
+func TestUpdateIssueRejectsInvalidRequests(t *testing.T) {
+	validFingerprint := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	oversized := append([]byte(`{"status":"`), bytes.Repeat([]byte("x"), maxIssueUpdateBodySize+1)...)
+	oversized = append(oversized, []byte(`"}`)...)
+	tests := []struct {
+		name        string
+		fingerprint string
+		contentType string
+		body        []byte
+		wantStatus  int
+	}{
+		{name: "fingerprint", fingerprint: "invalid", contentType: "application/json", body: []byte(`{"status":"open"}`), wantStatus: http.StatusBadRequest},
+		{name: "media type", fingerprint: validFingerprint, contentType: "text/plain", body: []byte(`{"status":"open"}`), wantStatus: http.StatusUnsupportedMediaType},
+		{name: "JSON", fingerprint: validFingerprint, contentType: "application/json", body: []byte(`{`), wantStatus: http.StatusBadRequest},
+		{name: "unknown field", fingerprint: validFingerprint, contentType: "application/json", body: []byte(`{"other":true}`), wantStatus: http.StatusBadRequest},
+		{name: "multiple values", fingerprint: validFingerprint, contentType: "application/json", body: []byte(`{"status":"open"}{}`), wantStatus: http.StatusBadRequest},
+		{name: "status", fingerprint: validFingerprint, contentType: "application/json", body: []byte(`{"status":"closed"}`), wantStatus: http.StatusUnprocessableEntity},
+		{name: "too large", fingerprint: validFingerprint, contentType: "application/json", body: oversized, wantStatus: http.StatusRequestEntityTooLarge},
+		{name: "missing", fingerprint: validFingerprint, contentType: "application/json", body: []byte(`{"status":"open"}`), wantStatus: http.StatusNotFound},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := authorizedRequest(http.MethodPatch, "/api/v1/issues/"+test.fingerprint)
+			request.Header.Set("Content-Type", test.contentType)
+			request.Body = io.NopCloser(bytes.NewReader(test.body))
+			response := httptest.NewRecorder()
+
+			newTestServer().Handler().ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body.String())
+			}
+		})
 	}
 }
 

@@ -218,6 +218,48 @@ LIMIT ? OFFSET ?
 	}, nil
 }
 
+// SetIssueStatus updates the triage state of one issue.
+func (s *SQLite) SetIssueStatus(ctx context.Context, projectID, fingerprint string, status IssueStatus) (Issue, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return Issue{}, ErrProjectRequired
+	}
+	if !status.Valid() {
+		return Issue{}, ErrInvalidStatus
+	}
+	if err := ctx.Err(); err != nil {
+		return Issue{}, err
+	}
+
+	transaction, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Issue{}, fmt.Errorf("begin status transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	result, err := transaction.ExecContext(ctx, `
+UPDATE issues SET status = ? WHERE project_id = ? AND fingerprint = ?
+`, status, projectID, fingerprint)
+	if err != nil {
+		return Issue{}, fmt.Errorf("update issue status: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return Issue{}, fmt.Errorf("read updated row count: %w", err)
+	}
+	if rowsAffected == 0 {
+		return Issue{}, ErrIssueNotFound
+	}
+
+	issue, err := queryIssue(ctx, transaction, projectID, fingerprint)
+	if err != nil {
+		return Issue{}, err
+	}
+	if err := transaction.Commit(); err != nil {
+		return Issue{}, fmt.Errorf("commit status transaction: %w", err)
+	}
+	return issue, nil
+}
+
 type rowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }

@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,10 +12,17 @@ import (
 	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
-const maxIssueOffset = 100_000
+const (
+	maxIssueOffset         = 100_000
+	maxIssueUpdateBodySize = 4 * 1024
+)
 
 type issueResponse struct {
 	Issue store.Issue `json:"issue"`
+}
+
+type issueUpdateRequest struct {
+	Status store.IssueStatus `json:"status"`
 }
 
 func (s *Server) listIssues(w http.ResponseWriter, request *http.Request) {
@@ -45,6 +54,54 @@ func (s *Server) getIssue(w http.ResponseWriter, request *http.Request) {
 	}
 
 	issue, err := s.store.GetIssue(request.Context(), s.projectID, fingerprint)
+	if errors.Is(err, store.ErrIssueNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "issue_not_found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, issueResponse{Issue: issue})
+}
+
+func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
+	if !s.authorizeAdmin(w, request) {
+		return
+	}
+	fingerprint := request.PathValue("fingerprint")
+	if !validFingerprint(fingerprint) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_fingerprint"})
+		return
+	}
+	if !isJSONMediaType(request.Header.Get("Content-Type")) {
+		writeJSON(w, http.StatusUnsupportedMediaType, errorResponse{Error: "unsupported_media_type"})
+		return
+	}
+
+	request.Body = http.MaxBytesReader(w, request.Body, maxIssueUpdateBodySize)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	var payload issueUpdateRequest
+	if err := decoder.Decode(&payload); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request_too_large"})
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+		return
+	}
+	if err := ensureJSONEnd(decoder); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
+		return
+	}
+	if !payload.Status.Valid() {
+		writeJSON(w, http.StatusUnprocessableEntity, errorResponse{Error: "invalid_status", Field: "status"})
+		return
+	}
+
+	issue, err := s.store.SetIssueStatus(request.Context(), s.projectID, fingerprint, payload.Status)
 	if errors.Is(err, store.ErrIssueNotFound) {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "issue_not_found"})
 		return
@@ -100,4 +157,9 @@ func validFingerprint(value string) bool {
 	}
 	_, err := hex.DecodeString(value)
 	return err == nil && strings.ToLower(value) == value
+}
+
+func isJSONMediaType(header string) bool {
+	mediaType, _, err := mime.ParseMediaType(header)
+	return err == nil && mediaType == "application/json"
 }

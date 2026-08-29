@@ -45,6 +45,7 @@ func New(options Options) *Server {
 	mux.HandleFunc("POST /api/v1/events", server.ingestEvent)
 	mux.HandleFunc("GET /api/v1/issues", server.listIssues)
 	mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
+	mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
 	server.handler = mux
 	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != "")
 	return server

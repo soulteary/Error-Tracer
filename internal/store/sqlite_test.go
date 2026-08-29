@@ -157,6 +157,44 @@ func TestSQLiteRejectsInvalidInputAndMapsMissingIssue(t *testing.T) {
 	}
 }
 
+func TestSQLiteSetIssueStatusPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "error-tracer.db")
+	database := openTestSQLite(t, path)
+	captured := testEvent(time.Now().UTC())
+	stored, err := database.Record(context.Background(), "project-a", captured)
+	if err != nil {
+		t.Fatalf("record issue: %v", err)
+	}
+	updated, err := database.SetIssueStatus(
+		context.Background(), "project-a", stored.Fingerprint, IssueStatusIgnored,
+	)
+	if err != nil {
+		t.Fatalf("set issue status: %v", err)
+	}
+	if updated.Status != IssueStatusIgnored {
+		t.Fatalf("status = %q, want %q", updated.Status, IssueStatusIgnored)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	reopened := openTestSQLite(t, path)
+	t.Cleanup(func() { _ = reopened.Close() })
+	persisted, err := reopened.GetIssue(context.Background(), "project-a", stored.Fingerprint)
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if persisted.Status != IssueStatusIgnored {
+		t.Fatalf("persisted status = %q, want %q", persisted.Status, IssueStatusIgnored)
+	}
+	if _, err := reopened.SetIssueStatus(context.Background(), "project-a", stored.Fingerprint, "closed"); !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("invalid status error = %v, want ErrInvalidStatus", err)
+	}
+	if _, err := reopened.SetIssueStatus(context.Background(), "project-a", "missing", IssueStatusOpen); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("missing issue error = %v, want ErrIssueNotFound", err)
+	}
+}
+
 func openTestSQLite(t *testing.T, path string) *SQLite {
 	t.Helper()
 	database, err := OpenSQLite(context.Background(), path)
