@@ -9,12 +9,14 @@ import (
 
 const (
 	defaultAddress         = ":8080"
+	defaultDatabasePath    = "error-tracer.db"
 	defaultShutdownTimeout = 10 * time.Second
 )
 
 // Config contains process-level settings for the Error-Tracer service.
 type Config struct {
 	Address         string
+	DatabasePath    string
 	ShutdownTimeout time.Duration
 	ProjectID       string
 	IngestKey       string
@@ -25,6 +27,10 @@ func FromEnvironment() (Config, error) {
 	address := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADDRESS"))
 	if address == "" {
 		address = defaultAddress
+	}
+	databasePath := strings.TrimSpace(os.Getenv("ERROR_TRACER_DATABASE_PATH"))
+	if databasePath == "" {
+		databasePath = defaultDatabasePath
 	}
 	projectID := strings.TrimSpace(os.Getenv("ERROR_TRACER_PROJECT_ID"))
 	if projectID == "" {
@@ -37,6 +43,7 @@ func FromEnvironment() (Config, error) {
 
 	return Config{
 		Address:         address,
+		DatabasePath:    databasePath,
 		ShutdownTimeout: defaultShutdownTimeout,
 		ProjectID:       projectID,
 		IngestKey:       ingestKey,

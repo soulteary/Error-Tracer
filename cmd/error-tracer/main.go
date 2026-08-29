@@ -21,8 +21,19 @@ func main() {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
+	issueStore, err := store.OpenSQLite(context.Background(), cfg.DatabasePath)
+	if err != nil {
+		slog.Error("open issue database", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := issueStore.Close(); err != nil {
+			slog.Error("close issue database", "error", err)
+		}
+	}()
+
 	app := appserver.New(appserver.Options{
-		Store:     store.NewMemory(),
+		Store:     issueStore,
 		ProjectID: cfg.ProjectID,
 		IngestKey: cfg.IngestKey,
 	})
