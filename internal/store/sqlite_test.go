@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/soulteary/Error-Tracer/internal/event"
 )
 
 func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
@@ -44,6 +46,58 @@ func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
 	}
 	if persisted.Occurrences != 2 || persisted.LastEvent.Release != "2.0.0" {
 		t.Fatalf("persisted issue = %#v", persisted)
+	}
+}
+
+func TestSQLiteRecordBatchUsesOneAtomicTransaction(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	first := testEvent(base)
+	second := testEvent(base.Add(time.Minute))
+	second.Release = "2.0.0"
+
+	issues, err := database.RecordBatch(
+		context.Background(), "project-a", []event.Event{first, second},
+	)
+	if err != nil {
+		t.Fatalf("record batch: %v", err)
+	}
+	if len(issues) != 2 || issues[0].Occurrences != 2 || issues[1].Occurrences != 2 {
+		t.Fatalf("batch issues = %#v, want two views of the final aggregate", issues)
+	}
+	if issues[1].LastEvent.Release != "2.0.0" {
+		t.Fatalf("last event = %#v, want second batch event", issues[1].LastEvent)
+	}
+
+	if _, err := database.db.Exec(`
+CREATE TRIGGER reject_batch_event
+BEFORE INSERT ON issues
+WHEN NEW.message = 'reject batch'
+BEGIN
+    SELECT RAISE(ABORT, 'rejected batch event');
+END;
+`); err != nil {
+		t.Fatalf("create rejection trigger: %v", err)
+	}
+	accepted := testEvent(base.Add(2 * time.Minute))
+	accepted.Message = "would be written without rollback"
+	rejected := testEvent(base.Add(3 * time.Minute))
+	rejected.Message = "reject batch"
+	if _, err := database.RecordBatch(
+		context.Background(), "project-a", []event.Event{accepted, rejected},
+	); err == nil {
+		t.Fatal("record rejected batch error = nil")
+	}
+	if _, err := database.GetIssue(
+		context.Background(), "project-a", accepted.Fingerprint(),
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("first event in failed batch error = %v, want ErrIssueNotFound", err)
+	}
+	if _, err := database.RecordBatch(
+		context.Background(), "project-a", nil,
+	); !errors.Is(err, ErrEventsRequired) {
+		t.Fatalf("empty batch error = %v, want ErrEventsRequired", err)
 	}
 }
 

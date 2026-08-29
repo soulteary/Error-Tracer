@@ -22,51 +22,64 @@ func NewMemory() *Memory {
 
 // Record adds an event to its fingerprint group.
 func (m *Memory) Record(ctx context.Context, projectID string, captured event.Event) (Issue, error) {
-	if err := ctx.Err(); err != nil {
+	issues, err := m.RecordBatch(ctx, projectID, []event.Event{captured})
+	if err != nil {
 		return Issue{}, err
 	}
-	projectID = strings.TrimSpace(projectID)
-	if projectID == "" {
-		return Issue{}, ErrProjectRequired
-	}
-	if captured.ReceivedAt.IsZero() {
-		return Issue{}, ErrReceivedAtEmpty
-	}
+	return issues[0], nil
+}
 
-	fingerprint := captured.Fingerprint()
-	key := issueKey(projectID, fingerprint)
-	captured = cloneEvent(captured)
+// RecordBatch atomically adds a non-empty batch of events.
+func (m *Memory) RecordBatch(ctx context.Context, projectID string, captured []event.Event) ([]Issue, error) {
+	projectID, err := validateRecordBatch(ctx, projectID, captured)
+	if err != nil {
+		return nil, err
+	}
+	events := make([]event.Event, len(captured))
+	for index, item := range captured {
+		events[index] = cloneEvent(item)
+	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	issue, exists := m.issues[key]
-	if !exists {
-		issue = Issue{
-			ProjectID:   projectID,
-			Fingerprint: fingerprint,
-			Kind:        captured.Kind,
-			Message:     captured.Message,
-			SourceURL:   captured.SourceURL,
-			Line:        captured.Line,
-			Column:      captured.Column,
-			Status:      IssueStatusOpen,
-			FirstSeen:   captured.ReceivedAt,
-			LastSeen:    captured.ReceivedAt,
-			LastEvent:   captured,
+	fingerprints := make([]string, len(events))
+	for index, item := range events {
+		fingerprint := item.Fingerprint()
+		fingerprints[index] = fingerprint
+		key := issueKey(projectID, fingerprint)
+		issue, exists := m.issues[key]
+		if !exists {
+			issue = Issue{
+				ProjectID:   projectID,
+				Fingerprint: fingerprint,
+				Kind:        item.Kind,
+				Message:     item.Message,
+				SourceURL:   item.SourceURL,
+				Line:        item.Line,
+				Column:      item.Column,
+				Status:      IssueStatusOpen,
+				FirstSeen:   item.ReceivedAt,
+				LastSeen:    item.ReceivedAt,
+				LastEvent:   item,
+			}
 		}
-	}
 
-	issue.Occurrences++
-	if captured.ReceivedAt.Before(issue.FirstSeen) {
-		issue.FirstSeen = captured.ReceivedAt
+		issue.Occurrences++
+		if item.ReceivedAt.Before(issue.FirstSeen) {
+			issue.FirstSeen = item.ReceivedAt
+		}
+		if !item.ReceivedAt.Before(issue.LastSeen) {
+			issue.LastSeen = item.ReceivedAt
+			issue.LastEvent = item
+		}
+		m.issues[key] = issue
 	}
-	if !captured.ReceivedAt.Before(issue.LastSeen) {
-		issue.LastSeen = captured.ReceivedAt
-		issue.LastEvent = captured
+	issues := make([]Issue, len(events))
+	for index, fingerprint := range fingerprints {
+		issues[index] = cloneIssue(m.issues[issueKey(projectID, fingerprint)])
 	}
-	m.issues[key] = issue
-	return cloneIssue(issue), nil
+	return issues, nil
 }
 
 // GetIssue returns one issue from one project.

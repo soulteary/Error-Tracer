@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,6 +83,131 @@ func TestIngestEventAcceptsBeaconTextPlain(t *testing.T) {
 
 	if response.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+}
+
+func TestIngestBatchWritesEventsAtomically(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:     memory,
+		ProjectID: "project-a",
+		IngestKey: "0123456789abcdef",
+	})
+	receivedAt := time.Date(2026, time.August, 29, 2, 0, 0, 0, time.UTC)
+	app.now = func() time.Time { return receivedAt }
+	ids := []string{"evt_first", "evt_second"}
+	app.newID = func() (string, error) {
+		id := ids[0]
+		ids = ids[1:]
+		return id, nil
+	}
+
+	body := `{
+		"project_key":"0123456789abcdef",
+		"events":[
+			{"kind":"error","message":" first "},
+			{"kind":"error","message":" second "}
+		]
+	}`
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", "batch-agent")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+	var result batchIngestResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(result.Events) != 2 || result.Events[0].ID != "evt_first" ||
+		result.Events[1].ID != "evt_second" {
+		t.Fatalf("response = %#v, want two server-assigned IDs", result)
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list stored issues: %v", err)
+	}
+	if page.Total != 2 {
+		t.Fatalf("stored issues = %d, want 2", page.Total)
+	}
+	for _, issue := range page.Issues {
+		if !issue.LastEvent.ReceivedAt.Equal(receivedAt) ||
+			issue.LastEvent.UserAgent != "batch-agent" {
+			t.Fatalf("server-controlled batch fields = %#v", issue.LastEvent)
+		}
+	}
+}
+
+func TestIngestBatchRejectsEntireInvalidBatch(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:     memory,
+		ProjectID: "project-a",
+		IngestKey: "0123456789abcdef",
+	})
+	body := `{
+		"project_key":"0123456789abcdef",
+		"events":[
+			{"kind":"error","message":"valid"},
+			{"kind":"error"}
+		]
+	}`
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
+	}
+	var failure errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if failure.Error != "invalid_event" || failure.Field != "events[1].message" {
+		t.Fatalf("failure = %#v, want indexed validation error", failure)
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list stored issues: %v", err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("stored issues = %d, want no partial batch", page.Total)
+	}
+}
+
+func TestIngestBatchEnforcesBounds(t *testing.T) {
+	for _, count := range []int{0, maxBatchEvents + 1} {
+		t.Run(fmt.Sprintf("%d events", count), func(t *testing.T) {
+			events := make([]event.Event, count)
+			body, err := json.Marshal(batchIngestRequest{
+				ProjectKey: "0123456789abcdef",
+				Events:     events,
+			})
+			if err != nil {
+				t.Fatalf("encode request: %v", err)
+			}
+			request := httptest.NewRequest(
+				http.MethodPost, "/api/v1/events/batch", bytes.NewReader(body),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			newTestServer().Handler().ServeHTTP(response, request)
+
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusUnprocessableEntity, response.Body.String())
+			}
+		})
 	}
 }
 

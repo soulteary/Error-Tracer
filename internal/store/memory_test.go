@@ -41,6 +41,48 @@ func TestMemoryRecordAggregatesMatchingEvents(t *testing.T) {
 	}
 }
 
+func TestMemoryRecordBatchAggregatesAndValidatesBeforeWriting(t *testing.T) {
+	memory := NewMemory()
+	firstTime := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	first := testEvent(firstTime)
+	second := testEvent(firstTime.Add(time.Minute))
+	second.Release = "2.0.0"
+
+	issues, err := memory.RecordBatch(
+		context.Background(), "project-a", []event.Event{first, second},
+	)
+	if err != nil {
+		t.Fatalf("record batch: %v", err)
+	}
+	if len(issues) != 2 || issues[0].Occurrences != 2 || issues[1].Occurrences != 2 {
+		t.Fatalf("batch issues = %#v, want two views of the final aggregate", issues)
+	}
+	if issues[1].LastEvent.Release != "2.0.0" {
+		t.Fatalf("last event = %#v, want second batch event", issues[1].LastEvent)
+	}
+
+	invalid := testEvent(firstTime.Add(2 * time.Minute))
+	invalid.Message = "must not be stored"
+	invalid.ReceivedAt = time.Time{}
+	if _, err := memory.RecordBatch(
+		context.Background(), "project-a", []event.Event{testEvent(firstTime), invalid},
+	); !errors.Is(err, ErrReceivedAtEmpty) {
+		t.Fatalf("invalid batch error = %v, want ErrReceivedAtEmpty", err)
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", ListOptions{})
+	if err != nil {
+		t.Fatalf("list issues: %v", err)
+	}
+	if page.Total != 1 || page.Issues[0].Occurrences != 2 {
+		t.Fatalf("page after invalid batch = %#v, want the original two events only", page)
+	}
+	if _, err := memory.RecordBatch(
+		context.Background(), "project-a", nil,
+	); !errors.Is(err, ErrEventsRequired) {
+		t.Fatalf("empty batch error = %v, want ErrEventsRequired", err)
+	}
+}
+
 func TestMemorySeparatesProjects(t *testing.T) {
 	memory := NewMemory()
 	captured := testEvent(time.Now())

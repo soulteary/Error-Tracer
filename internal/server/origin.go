@@ -6,16 +6,30 @@ import (
 )
 
 func (s *Server) ingestEventWithOrigin(w http.ResponseWriter, request *http.Request) {
-	if !s.allowEventOrigin(w, request) {
+	if !s.allowIngestRequest(w, request) {
 		return
+	}
+	s.ingestEvent(w, request)
+}
+
+func (s *Server) ingestBatchWithOrigin(w http.ResponseWriter, request *http.Request) {
+	if !s.allowIngestRequest(w, request) {
+		return
+	}
+	s.ingestBatch(w, request)
+}
+
+func (s *Server) allowIngestRequest(w http.ResponseWriter, request *http.Request) bool {
+	if !s.allowEventOrigin(w, request) {
+		return false
 	}
 	allowed, retryAfter := s.ingestLimiter.Allow(clientAddress(request.RemoteAddr))
 	if !allowed {
 		w.Header().Set("Retry-After", retryAfterHeader(retryAfter))
 		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})
-		return
+		return false
 	}
-	s.ingestEvent(w, request)
+	return true
 }
 
 func (s *Server) preflightEvent(w http.ResponseWriter, request *http.Request) {
