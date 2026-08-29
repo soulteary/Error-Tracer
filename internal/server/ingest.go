@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -125,10 +126,9 @@ func ensureJSONEnd(decoder *json.Decoder) error {
 }
 
 func constantTimeEqual(left, right string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(left), []byte(right)) == 1
+	leftDigest := sha256.Sum256([]byte(left))
+	rightDigest := sha256.Sum256([]byte(right))
+	return subtle.ConstantTimeCompare(leftDigest[:], rightDigest[:]) == 1
 }
 
 func randomEventID() (string, error) {
