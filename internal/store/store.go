@@ -60,6 +60,7 @@ type Issue struct {
 type ListOptions struct {
 	Limit  int
 	Offset int
+	Status IssueStatus
 }
 
 // IssuePage is a stable page of issues and the total matching count.

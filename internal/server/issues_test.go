@@ -100,6 +100,66 @@ func TestListIssuesRejectsInvalidPagination(t *testing.T) {
 	}
 }
 
+func TestListIssuesFiltersByStatus(t *testing.T) {
+	memory := store.NewMemory()
+	base := time.Date(2026, time.August, 29, 2, 0, 0, 0, time.UTC)
+	openEvent := event.Event{
+		Kind: event.KindError, Message: "open failure", ReceivedAt: base,
+	}
+	if _, err := memory.Record(context.Background(), "project-a", openEvent); err != nil {
+		t.Fatalf("record open issue: %v", err)
+	}
+	resolvedEvent := event.Event{
+		Kind: event.KindError, Message: "resolved failure", ReceivedAt: base.Add(time.Minute),
+	}
+	resolved, err := memory.Record(context.Background(), "project-a", resolvedEvent)
+	if err != nil {
+		t.Fatalf("record resolved issue: %v", err)
+	}
+	if _, err := memory.SetIssueStatus(
+		context.Background(), "project-a", resolved.Fingerprint, store.IssueStatusResolved,
+	); err != nil {
+		t.Fatalf("resolve issue: %v", err)
+	}
+	app := New(Options{
+		Store: memory, ProjectID: "project-a", IngestKey: "0123456789abcdef", AdminToken: testAdminToken,
+	})
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, authorizedRequest(
+		http.MethodGet, "/api/v1/issues?status=resolved",
+	))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	var page store.IssuePage
+	if err := json.NewDecoder(response.Body).Decode(&page); err != nil {
+		t.Fatalf("decode page: %v", err)
+	}
+	if page.Total != 1 || len(page.Issues) != 1 ||
+		page.Issues[0].Status != store.IssueStatusResolved {
+		t.Fatalf("page = %#v, want one resolved issue", page)
+	}
+
+	for _, target := range []string{
+		"/api/v1/issues?status=closed",
+		"/api/v1/issues?status=open&status=resolved",
+	} {
+		invalid := httptest.NewRecorder()
+		app.Handler().ServeHTTP(invalid, authorizedRequest(http.MethodGet, target))
+		if invalid.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want %d", target, invalid.Code, http.StatusBadRequest)
+		}
+		var failure errorResponse
+		if err := json.NewDecoder(invalid.Body).Decode(&failure); err != nil {
+			t.Fatalf("decode invalid status response: %v", err)
+		}
+		if failure.Error != "invalid_status" || failure.Field != "status" {
+			t.Fatalf("failure = %#v, want invalid_status for status", failure)
+		}
+	}
+}
+
 func TestGetIssue(t *testing.T) {
 	memory := store.NewMemory()
 	captured := event.Event{Kind: event.KindError, Message: "boom", ReceivedAt: time.Now().UTC()}

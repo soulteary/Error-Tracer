@@ -97,12 +97,16 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 	if projectID == "" {
 		return IssuePage{}, ErrProjectRequired
 	}
+	if options.Status != "" && !options.Status.Valid() {
+		return IssuePage{}, ErrInvalidStatus
+	}
 	options = normalizeListOptions(options)
 
 	m.mu.RLock()
 	issues := make([]Issue, 0, len(m.issues))
 	for _, issue := range m.issues {
-		if issue.ProjectID == projectID {
+		if issue.ProjectID == projectID &&
+			(options.Status == "" || issue.Status == options.Status) {
 			issues = append(issues, cloneIssue(issue))
 		}
 	}

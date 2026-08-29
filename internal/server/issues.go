@@ -31,6 +31,10 @@ func (s *Server) listIssues(w http.ResponseWriter, request *http.Request) {
 	}
 	options, err := parseListOptions(request)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidStatus) {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_status", Field: "status"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_pagination"})
 		return
 	}
@@ -132,6 +136,9 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 	if len(query["limit"]) > 1 || len(query["offset"]) > 1 {
 		return store.ListOptions{}, errors.New("pagination parameters must not be repeated")
 	}
+	if len(query["status"]) > 1 {
+		return store.ListOptions{}, store.ErrInvalidStatus
+	}
 
 	var options store.ListOptions
 	if raw := query.Get("limit"); raw != "" {
@@ -147,6 +154,12 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 			return store.ListOptions{}, errors.New("offset is out of range")
 		}
 		options.Offset = offset
+	}
+	if raw := query.Get("status"); raw != "" {
+		options.Status = store.IssueStatus(raw)
+		if !options.Status.Valid() {
+			return store.ListOptions{}, store.ErrInvalidStatus
+		}
 	}
 	return options, nil
 }
