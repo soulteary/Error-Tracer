@@ -143,6 +143,54 @@ func TestDemoModeServesIsolatedReadOnlyFixtures(t *testing.T) {
 	}
 }
 
+func TestDemoOnlyModeIsReadyWithoutPrivateServices(t *testing.T) {
+	app := New(Options{DemoOnly: true})
+
+	readyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		readyResponse,
+		httptest.NewRequest(http.MethodGet, "/readyz", nil),
+	)
+	if readyResponse.Code != http.StatusOK {
+		t.Fatalf("readiness status = %d, want %d", readyResponse.Code, http.StatusOK)
+	}
+
+	metadataResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		metadataResponse,
+		httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil),
+	)
+	var metadata publicMetadataResponse
+	if err := json.NewDecoder(metadataResponse.Body).Decode(&metadata); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if !metadata.DemoMode || !metadata.DemoOnly {
+		t.Fatalf("metadata = %+v, want demo_mode and demo_only", metadata)
+	}
+
+	demoResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		demoResponse,
+		httptest.NewRequest(http.MethodGet, "/api/v1/demo/issues?limit=1", nil),
+	)
+	if demoResponse.Code != http.StatusOK {
+		t.Fatalf("demo status = %d, want %d", demoResponse.Code, http.StatusOK)
+	}
+
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(`{}`)),
+		httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil),
+		httptest.NewRequest(http.MethodPatch, "/api/v1/issues/"+strings.Repeat("0", 64), strings.NewReader(`{}`)),
+	} {
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("%s %s: status = %d, want %d", request.Method, request.URL.Path, response.Code, http.StatusNotFound)
+		}
+	}
+}
+
 func TestDemoListValidatesFilters(t *testing.T) {
 	app := New(Options{
 		Store:      store.NewMemory(),

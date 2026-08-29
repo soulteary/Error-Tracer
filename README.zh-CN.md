@@ -21,9 +21,29 @@ Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服�
 - 提供带鉴权的 JSON API 和内嵌 Dashboard。
 - Dashboard 支持 English / 简体中文，且不依赖浏览器存储。
 - 提供显式开启、完全隔离真实数据库的公开只读演示模式。
+- 使用 `error-tracer demo` 无配置、无数据库启动产品演示。
 - 限制请求体大小、浏览器来源、单个对等端速率，并使用常量时间比较凭据。
 - 可构建为单个静态二进制，也可在非 root、只读容器中运行。
 - 自带数据库/程序基准测试和有安全边界的 HTTP 压力测试命令。
+
+## 无配置查看演示
+
+在源码目录直接启动只读产品演示：
+
+```sh
+go run ./cmd/error-tracer demo
+```
+
+然后打开 <http://127.0.0.1:8080/>，Dashboard 会自动进入内置样例工作区。
+该命令不要求采集密钥或管理员令牌，不打开 SQLite，也不会注册事件采集和
+管理问题路由。
+
+也可以使用容器运行同一个隔离演示：
+
+```sh
+docker build -t error-tracer:demo .
+docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
+```
 
 ## 使用 Docker Compose 快速启动
 
@@ -173,7 +193,7 @@ Authorization: Bearer 替换为管理员令牌
 | --- | --- | --- | --- |
 | `GET` | `/` | 无 | Dashboard 外壳；读取真实数据仍需管理员令牌 |
 | `GET` | `/assets/error-tracer.js` | 无 | 内嵌浏览器 SDK |
-| `GET` | `/api/v1/meta` | 无 | 公开功能元数据，目前仅包含演示开关 |
+| `GET` | `/api/v1/meta` | 无 | 公开演示可用状态及纯演示模式标记 |
 | `GET` | `/api/v1/demo/issues` | 无，仅演示模式 | 列出内置只读演示问题 |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | 无，仅演示模式 | 读取一个内置演示问题 |
 | `POST` | `/api/v1/events` | 请求体中的采集密钥 | 提交单个事件 |
