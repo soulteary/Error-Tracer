@@ -14,6 +14,7 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "development-key-1")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "development-admin-token-1")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", "")
+	t.Setenv("ERROR_TRACER_METRICS_ENABLED", "")
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", "")
 	t.Setenv("ERROR_TRACER_RATE_BURST", "")
 	t.Setenv("ERROR_TRACER_DEMO_MODE", "")
@@ -38,6 +39,9 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	if cfg.RatePerMinute != 120 || cfg.RateBurst != 30 {
 		t.Fatalf("rate = %d/minute burst %d, want 120/minute burst 30", cfg.RatePerMinute, cfg.RateBurst)
 	}
+	if cfg.MetricsEnabled {
+		t.Fatal("MetricsEnabled = true, want false")
+	}
 	if cfg.DemoMode {
 		t.Fatal("DemoMode = true, want false")
 	}
@@ -53,6 +57,7 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", " 0123456789abcdefghijklmn ")
 	t.Setenv("ERROR_TRACER_ALLOWED_ORIGINS", " HTTPS://APP.EXAMPLE.COM/ ,https://admin.example.com,https://app.example.com ")
+	t.Setenv("ERROR_TRACER_METRICS_ENABLED", " true ")
 	t.Setenv("ERROR_TRACER_RATE_PER_MINUTE", " 240 ")
 	t.Setenv("ERROR_TRACER_RATE_BURST", " 40 ")
 	t.Setenv("ERROR_TRACER_DEMO_MODE", " true ")
@@ -84,6 +89,9 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	if cfg.RatePerMinute != 240 || cfg.RateBurst != 40 {
 		t.Fatalf("rate = %d/minute burst %d, want 240/minute burst 40", cfg.RatePerMinute, cfg.RateBurst)
 	}
+	if !cfg.MetricsEnabled {
+		t.Fatal("MetricsEnabled = false, want true")
+	}
 	if !cfg.DemoMode {
 		t.Fatal("DemoMode = false, want true")
 	}
@@ -113,6 +121,17 @@ func TestFromEnvironmentRejectsInvalidDemoMode(t *testing.T) {
 	_, err := FromEnvironment()
 	if err == nil || err.Error() != "ERROR_TRACER_DEMO_MODE must be true or false" {
 		t.Fatalf("FromEnvironment() error = %v, want strict demo mode error", err)
+	}
+}
+
+func TestFromEnvironmentRejectsInvalidMetricsMode(t *testing.T) {
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+	t.Setenv("ERROR_TRACER_METRICS_ENABLED", "1")
+
+	_, err := FromEnvironment()
+	if err == nil || err.Error() != "ERROR_TRACER_METRICS_ENABLED must be true or false" {
+		t.Fatalf("FromEnvironment() error = %v, want strict metrics mode error", err)
 	}
 }
 

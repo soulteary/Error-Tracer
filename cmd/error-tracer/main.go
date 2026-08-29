@@ -55,6 +55,7 @@ func run() int {
 		RatePerMinute:  cfg.RatePerMinute,
 		RateBurst:      cfg.RateBurst,
 		DemoMode:       cfg.DemoMode,
+		MetricsEnabled: cfg.MetricsEnabled,
 	})
 
 	httpServer := &http.Server{

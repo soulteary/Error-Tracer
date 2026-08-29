@@ -98,6 +98,9 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
+	if s.metrics != nil {
+		s.metrics.addIngested(1)
+	}
 
 	writeJSON(w, http.StatusAccepted, ingestResponse{
 		ID:          captured.ID,
@@ -167,6 +170,9 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 	if err != nil || len(issues) != len(captured) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
+	}
+	if s.metrics != nil {
+		s.metrics.addIngested(len(captured))
 	}
 	response := batchIngestResponse{Events: make([]ingestResponse, len(captured))}
 	for index := range captured {

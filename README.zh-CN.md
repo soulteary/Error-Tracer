@@ -179,6 +179,7 @@ Authorization: Bearer 替换为管理员令牌
 | `PATCH` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 更新状态 |
 | `GET` | `/healthz` | 无 | 进程存活状态 |
 | `GET` | `/readyz` | 无 | 是否可以接收新工作 |
+| `GET` | `/metrics` | 无，启用后可用 | 低基数 Prometheus 指标 |
 
 ## 配置
 
@@ -190,6 +191,7 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
 | `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
+| `ERROR_TRACER_METRICS_ENABLED` | 否 | `false` | 在 `/metrics` 开放无鉴权 Prometheus 指标 |
 | `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟允许的采集请求数 |
 | `ERROR_TRACER_RATE_BURST` | 否 | `30` | 令牌桶最大突发量 |
 | `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
@@ -246,6 +248,7 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 - 浏览器来源必须精确配置；系统有意拒绝通配符。
 - 限流器使用直接 TCP 对等端，不信任转发地址请求头。
 - 将 SQLite 路径或 `/data` 卷持久化到容器生命周期之外。
+- 启用 `/metrics` 后，应在反向代理或网络层限制其访问范围。
 - 优雅关闭 HTTP 服务前，进程会先将自身标记为未就绪。
 - 不需要公开演示时，保持 `ERROR_TRACER_DEMO_MODE=false`。
 
