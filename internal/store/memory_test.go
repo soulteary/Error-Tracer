@@ -85,6 +85,43 @@ func TestMemoryListIssuesIsBoundedAndOrdered(t *testing.T) {
 	}
 }
 
+func TestMemoryListIssuesFiltersByStatus(t *testing.T) {
+	memory := NewMemory()
+	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	openEvent := testEvent(base)
+	openEvent.Message = "open failure"
+	if _, err := memory.Record(context.Background(), "project-a", openEvent); err != nil {
+		t.Fatalf("record open issue: %v", err)
+	}
+	resolvedEvent := testEvent(base.Add(time.Minute))
+	resolvedEvent.Message = "resolved failure"
+	resolved, err := memory.Record(context.Background(), "project-a", resolvedEvent)
+	if err != nil {
+		t.Fatalf("record resolved issue: %v", err)
+	}
+	if _, err := memory.SetIssueStatus(
+		context.Background(), "project-a", resolved.Fingerprint, IssueStatusResolved,
+	); err != nil {
+		t.Fatalf("resolve issue: %v", err)
+	}
+
+	page, err := memory.ListIssues(
+		context.Background(), "project-a", ListOptions{Status: IssueStatusResolved},
+	)
+	if err != nil {
+		t.Fatalf("list resolved issues: %v", err)
+	}
+	if page.Total != 1 || len(page.Issues) != 1 ||
+		page.Issues[0].Message != "resolved failure" {
+		t.Fatalf("resolved page = %#v, want only the resolved issue", page)
+	}
+	if _, err := memory.ListIssues(
+		context.Background(), "project-a", ListOptions{Status: "closed"},
+	); !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("invalid status error = %v, want ErrInvalidStatus", err)
+	}
+}
+
 func TestMemoryRecordIsConcurrencySafe(t *testing.T) {
 	memory := NewMemory()
 	captured := testEvent(time.Now())

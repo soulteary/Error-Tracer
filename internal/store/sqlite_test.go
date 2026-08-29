@@ -98,6 +98,44 @@ func TestSQLiteListIssuesIsProjectScopedBoundedAndOrdered(t *testing.T) {
 	}
 }
 
+func TestSQLiteListIssuesFiltersByStatus(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	openEvent := testEvent(base)
+	openEvent.Message = "open failure"
+	if _, err := database.Record(context.Background(), "project-a", openEvent); err != nil {
+		t.Fatalf("record open issue: %v", err)
+	}
+	ignoredEvent := testEvent(base.Add(time.Minute))
+	ignoredEvent.Message = "ignored failure"
+	ignored, err := database.Record(context.Background(), "project-a", ignoredEvent)
+	if err != nil {
+		t.Fatalf("record ignored issue: %v", err)
+	}
+	if _, err := database.SetIssueStatus(
+		context.Background(), "project-a", ignored.Fingerprint, IssueStatusIgnored,
+	); err != nil {
+		t.Fatalf("ignore issue: %v", err)
+	}
+
+	page, err := database.ListIssues(
+		context.Background(), "project-a", ListOptions{Status: IssueStatusIgnored},
+	)
+	if err != nil {
+		t.Fatalf("list ignored issues: %v", err)
+	}
+	if page.Total != 1 || len(page.Issues) != 1 ||
+		page.Issues[0].Message != "ignored failure" {
+		t.Fatalf("ignored page = %#v, want only the ignored issue", page)
+	}
+	if _, err := database.ListIssues(
+		context.Background(), "project-a", ListOptions{Status: "closed"},
+	); !errors.Is(err, ErrInvalidStatus) {
+		t.Fatalf("invalid status error = %v, want ErrInvalidStatus", err)
+	}
+}
+
 func TestSQLiteRecordSerializesConcurrentWriters(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })

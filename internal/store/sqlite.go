@@ -164,6 +164,9 @@ func (s *SQLite) ListIssues(ctx context.Context, projectID string, options ListO
 	if err := ctx.Err(); err != nil {
 		return IssuePage{}, err
 	}
+	if options.Status != "" && !options.Status.Valid() {
+		return IssuePage{}, ErrInvalidStatus
+	}
 	options = normalizeListOptions(options)
 
 	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
@@ -172,21 +175,29 @@ func (s *SQLite) ListIssues(ctx context.Context, projectID string, options ListO
 	}
 	defer func() { _ = transaction.Rollback() }()
 
+	whereClause := "project_id = ?"
+	queryArguments := []any{projectID}
+	if options.Status != "" {
+		whereClause += " AND status = ?"
+		queryArguments = append(queryArguments, options.Status)
+	}
+
 	var total int
 	if err := transaction.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM issues WHERE project_id = ?", projectID,
+		"SELECT COUNT(*) FROM issues WHERE "+whereClause, queryArguments...,
 	).Scan(&total); err != nil {
 		return IssuePage{}, fmt.Errorf("count issues: %w", err)
 	}
 
+	listArguments := append(append([]any{}, queryArguments...), options.Limit, options.Offset)
 	rows, err := transaction.QueryContext(ctx, `
 SELECT project_id, fingerprint, kind, message, source_url, line, column_number,
        status, occurrences, first_seen, last_seen, last_event
 FROM issues
-WHERE project_id = ?
+WHERE `+whereClause+`
 ORDER BY last_seen DESC, fingerprint ASC
 LIMIT ? OFFSET ?
-`, projectID, options.Limit, options.Offset)
+`, listArguments...)
 	if err != nil {
 		return IssuePage{}, fmt.Errorf("list issues: %w", err)
 	}
