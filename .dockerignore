@@ -4,6 +4,16 @@
 .env
 *.db
 *.db-*
+*.db3
+*.db3-*
+*.s3db
+*.s3db-*
+*.sl3
+*.sl3-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 node_modules
 
 # The v1 runtime is preserved by the v1.0.0-legacy tag and is not required to
