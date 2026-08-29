@@ -36,5 +36,6 @@ ENV ERROR_TRACER_ADDRESS=:8080 \
 
 EXPOSE 8080
 STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 CMD ["/error-tracer", "healthcheck"]
 
 ENTRYPOINT ["/error-tracer"]
