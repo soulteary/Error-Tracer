@@ -37,6 +37,44 @@ func TestNormalizeRemovesSensitiveURLComponents(t *testing.T) {
 	}
 }
 
+func TestNormalizeResolvesTagKeyCollisionsDeterministically(t *testing.T) {
+	tests := []struct {
+		name string
+		tags map[string]string
+		want string
+	}{
+		{
+			name: "exact key wins",
+			tags: map[string]string{
+				" role": "leading",
+				"role":  "exact",
+				"role ": "trailing",
+			},
+			want: "exact",
+		},
+		{
+			name: "first alias wins without exact key",
+			tags: map[string]string{
+				" role": "leading",
+				"role ": "trailing",
+			},
+			want: "leading",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for range 100 {
+				captured := Event{Tags: test.tags}
+				captured.Normalize()
+				if len(captured.Tags) != 1 || captured.Tags["role"] != test.want {
+					t.Fatalf("Tags = %#v, want role=%q", captured.Tags, test.want)
+				}
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsSupportedEvents(t *testing.T) {
 	tests := []Event{
 		{Kind: KindError, Message: "boom"},
