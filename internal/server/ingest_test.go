@@ -200,3 +200,25 @@ func TestIngestNormalizesBeforeValidation(t *testing.T) {
 		t.Fatalf("normalized event validation: %v", err)
 	}
 }
+
+func TestConstantTimeEqualSupportsVariableLengthCredentials(t *testing.T) {
+	tests := []struct {
+		name  string
+		left  string
+		right string
+		want  bool
+	}{
+		{name: "equal", left: "0123456789abcdef", right: "0123456789abcdef", want: true},
+		{name: "same length mismatch", left: "0123456789abcdef", right: "0123456789abcdeg"},
+		{name: "short mismatch", left: "short", right: "0123456789abcdef"},
+		{name: "long mismatch", left: "0123456789abcdef-extra", right: "0123456789abcdef"},
+		{name: "empty values", left: "", right: "", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := constantTimeEqual(test.left, test.right); got != test.want {
+				t.Fatalf("constantTimeEqual() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
