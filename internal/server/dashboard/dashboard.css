@@ -308,6 +308,20 @@ p {
   background: linear-gradient(135deg, #897bff, #7164ec);
 }
 
+.button-demo {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 10px;
+  border: 1px solid rgba(84, 213, 175, 0.3);
+  color: #9de8cf;
+  background: rgba(34, 123, 98, 0.12);
+}
+
+.button-demo:hover {
+  border-color: rgba(84, 213, 175, 0.55);
+  background: rgba(34, 123, 98, 0.2);
+}
+
 .button-quiet {
   border: 1px solid var(--line);
   background: var(--surface-soft);
@@ -349,6 +363,33 @@ select:disabled {
 .workspace-heading h1 {
   margin: 0;
   font-size: clamp(32px, 4vw, 54px);
+}
+
+.demo-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: -18px 0 18px;
+  padding: 12px 16px;
+  border: 1px solid rgba(84, 213, 175, 0.24);
+  border-radius: 12px;
+  color: #b8e8d8;
+  background: rgba(34, 123, 98, 0.1);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.demo-banner[hidden] {
+  display: none;
+}
+
+.demo-banner strong {
+  flex: 0 0 auto;
+  color: #6ee7b7;
+}
+
+.demo-banner span {
+  color: var(--muted);
 }
 
 .header-actions {
@@ -832,6 +873,12 @@ pre {
 
   .workspace-heading h1 {
     font-size: 36px;
+  }
+
+  .demo-banner {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
   }
 
   .header-actions,

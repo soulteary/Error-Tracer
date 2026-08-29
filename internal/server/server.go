@@ -14,6 +14,7 @@ type Server struct {
 	handler        http.Handler
 	ready          atomic.Bool
 	store          store.Store
+	demoStore      store.Store
 	projectID      string
 	ingestKey      string
 	adminToken     string
@@ -32,6 +33,7 @@ type Options struct {
 	AllowedOrigins []string
 	RatePerMinute  int
 	RateBurst      int
+	DemoMode       bool
 }
 
 // New creates a service with liveness and readiness endpoints.
@@ -50,6 +52,9 @@ func New(options Options) *Server {
 		now:            time.Now,
 		newID:          randomEventID,
 	}
+	if options.DemoMode {
+		server.demoStore = newDemoStore(server.now().UTC())
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
@@ -57,6 +62,9 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /assets/dashboard.css", server.dashboardCSS)
 	mux.HandleFunc("GET /assets/dashboard.js", server.dashboardJS)
 	mux.HandleFunc("GET /assets/error-tracer.js", server.browserSDK)
+	mux.HandleFunc("GET /api/v1/meta", server.publicMetadata)
+	mux.HandleFunc("GET /api/v1/demo/issues", server.listDemoIssues)
+	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}", server.getDemoIssue)
 	mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
 	mux.HandleFunc("OPTIONS /api/v1/events", server.preflightEvent)
 	mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
