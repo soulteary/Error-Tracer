@@ -4,22 +4,44 @@ import (
 	"io"
 	"net/http"
 	"sync/atomic"
+	"time"
+
+	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
 // Server owns the HTTP routes and service readiness state.
 type Server struct {
-	handler http.Handler
-	ready   atomic.Bool
+	handler   http.Handler
+	ready     atomic.Bool
+	store     store.Store
+	projectID string
+	ingestKey string
+	now       func() time.Time
+	newID     func() (string, error)
+}
+
+// Options provides the dependencies required by the HTTP service.
+type Options struct {
+	Store     store.Store
+	ProjectID string
+	IngestKey string
 }
 
 // New creates a service with liveness and readiness endpoints.
-func New() *Server {
-	server := &Server{}
+func New(options Options) *Server {
+	server := &Server{
+		store:     options.Store,
+		projectID: options.ProjectID,
+		ingestKey: options.IngestKey,
+		now:       time.Now,
+		newID:     randomEventID,
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", server.health)
 	mux.HandleFunc("GET /readyz", server.readiness)
+	mux.HandleFunc("POST /api/v1/events", server.ingestEvent)
 	server.handler = mux
-	server.ready.Store(true)
+	server.ready.Store(options.Store != nil && options.ProjectID != "" && options.IngestKey != "")
 	return server
 }
 
