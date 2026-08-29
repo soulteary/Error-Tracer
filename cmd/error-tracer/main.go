@@ -11,11 +11,21 @@ import (
 	"time"
 
 	"github.com/soulteary/Error-Tracer/internal/config"
+	"github.com/soulteary/Error-Tracer/internal/healthcheck"
 	appserver "github.com/soulteary/Error-Tracer/internal/server"
 	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "healthcheck" {
+		address := os.Getenv("ERROR_TRACER_ADDRESS")
+		if err := healthcheck.Check(context.Background(), address); err != nil {
+			slog.Error("health check failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg, err := config.FromEnvironment()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
