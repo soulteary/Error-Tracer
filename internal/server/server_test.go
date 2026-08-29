@@ -58,8 +58,9 @@ func TestHealthRejectsOtherMethods(t *testing.T) {
 
 func newTestServer() *Server {
 	return New(Options{
-		Store:     store.NewMemory(),
-		ProjectID: "project-a",
-		IngestKey: "0123456789abcdef",
+		Store:      store.NewMemory(),
+		ProjectID:  "project-a",
+		IngestKey:  "0123456789abcdef",
+		AdminToken: "0123456789abcdefghijklmn",
 	})
 }

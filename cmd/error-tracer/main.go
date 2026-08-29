@@ -33,9 +33,10 @@ func main() {
 	}()
 
 	app := appserver.New(appserver.Options{
-		Store:     issueStore,
-		ProjectID: cfg.ProjectID,
-		IngestKey: cfg.IngestKey,
+		Store:      issueStore,
+		ProjectID:  cfg.ProjectID,
+		IngestKey:  cfg.IngestKey,
+		AdminToken: cfg.AdminToken,
 	})
 
 	httpServer := &http.Server{

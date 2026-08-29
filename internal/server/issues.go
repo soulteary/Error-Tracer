@@ -1,0 +1,103 @@
+package server
+
+import (
+	"encoding/hex"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/soulteary/Error-Tracer/internal/store"
+)
+
+const maxIssueOffset = 100_000
+
+type issueResponse struct {
+	Issue store.Issue `json:"issue"`
+}
+
+func (s *Server) listIssues(w http.ResponseWriter, request *http.Request) {
+	if !s.authorizeAdmin(w, request) {
+		return
+	}
+	options, err := parseListOptions(request)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_pagination"})
+		return
+	}
+
+	page, err := s.store.ListIssues(request.Context(), s.projectID, options)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (s *Server) getIssue(w http.ResponseWriter, request *http.Request) {
+	if !s.authorizeAdmin(w, request) {
+		return
+	}
+	fingerprint := request.PathValue("fingerprint")
+	if !validFingerprint(fingerprint) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_fingerprint"})
+		return
+	}
+
+	issue, err := s.store.GetIssue(request.Context(), s.projectID, fingerprint)
+	if errors.Is(err, store.ErrIssueNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "issue_not_found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeJSON(w, http.StatusOK, issueResponse{Issue: issue})
+}
+
+func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bool {
+	if s.store == nil || s.projectID == "" || s.adminToken == "" {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "admin_unavailable"})
+		return false
+	}
+	scheme, token, found := strings.Cut(request.Header.Get("Authorization"), " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") || !constantTimeEqual(token, s.adminToken) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="error-tracer"`)
+		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+		return false
+	}
+	return true
+}
+
+func parseListOptions(request *http.Request) (store.ListOptions, error) {
+	query := request.URL.Query()
+	if len(query["limit"]) > 1 || len(query["offset"]) > 1 {
+		return store.ListOptions{}, errors.New("pagination parameters must not be repeated")
+	}
+
+	var options store.ListOptions
+	if raw := query.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			return store.ListOptions{}, errors.New("limit must be between 1 and 100")
+		}
+		options.Limit = limit
+	}
+	if raw := query.Get("offset"); raw != "" {
+		offset, err := strconv.Atoi(raw)
+		if err != nil || offset < 0 || offset > maxIssueOffset {
+			return store.ListOptions{}, errors.New("offset is out of range")
+		}
+		options.Offset = offset
+	}
+	return options, nil
+}
+
+func validFingerprint(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && strings.ToLower(value) == value
+}
