@@ -283,6 +283,31 @@ test("keeps indented list continuations visible", () => {
   ].join("\n")), ["docs/inline.md", "docs/second.md"]);
 });
 
+test("recognizes empty list items without breaking Setext headings", () => {
+  assert.deepEqual(markdownTargets([
+    "-",
+    "    [unordered](docs/unordered.md)",
+    "1.",
+    "    [ordered](docs/ordered.md)",
+    "> -",
+    ">     [quoted](docs/quoted.md)",
+  ].join("\n")), [
+    "docs/unordered.md",
+    "docs/ordered.md",
+    "docs/quoted.md",
+  ]);
+  assert.deepEqual(markdownTargets([
+    "Heading",
+    "-",
+    "    [code](docs/not-visible.md)",
+  ].join("\n")), []);
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "+",
+    "    [continuation](docs/continuation.md)",
+  ].join("\n")), ["docs/continuation.md"]);
+});
+
 test("resets paragraph state between sibling list items", () => {
   assert.deepEqual(markdownTargets([
     "- First item",

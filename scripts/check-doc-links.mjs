@@ -213,7 +213,8 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
     }
     const list = listMarkerPrefix(remaining);
     if (list) {
-      if (list.orderedStart !== null && list.orderedStart !== 1 &&
+      if ((list.empty ||
+           (list.orderedStart !== null && list.orderedStart !== 1)) &&
           orderedListCanInterrupt && !orderedListCanInterrupt(containers)) {
         return { content: remaining, containers };
       }
@@ -267,10 +268,20 @@ function listMarkerPrefix(value) {
   }
 
   let index = marker[0].length;
+  const markerColumn = indentationWidth(value.slice(0, index));
+  const empty = !value.slice(index).trim();
+  if (index === value.length) {
+    return {
+      length: index,
+      indent: markerColumn + 1,
+      markerIndent: marker[1].length,
+      orderedStart: marker[2] === undefined ? null : Number(marker[2]),
+      empty: true,
+    };
+  }
   if (value[index] !== " " && value[index] !== "\t") {
     return null;
   }
-  const markerColumn = indentationWidth(value.slice(0, index));
   const firstPaddingEnd = index + 1;
   const firstPaddingColumn = value[index] === "\t"
     ? markerColumn + 4 - (markerColumn % 4)
@@ -284,6 +295,7 @@ function listMarkerPrefix(value) {
         indent: firstPaddingColumn,
         markerIndent: marker[1].length,
         orderedStart: marker[2] === undefined ? null : Number(marker[2]),
+        empty,
       };
     }
     index++;
@@ -293,6 +305,7 @@ function listMarkerPrefix(value) {
     indent: column,
     markerIndent: marker[1].length,
     orderedStart: marker[2] === undefined ? null : Number(marker[2]),
+    empty,
   };
 }
 
@@ -352,6 +365,9 @@ function paragraphOpenAfter(line, paragraphOpen) {
   }
   const list = listMarkerPrefix(value);
   if (list) {
+    if (list.empty && value.trim() !== "-") {
+      return paragraphOpen;
+    }
     return paragraphOpen && list.orderedStart !== null && list.orderedStart !== 1;
   }
   if (/^(?: {4}|\t)/.test(value)) {
