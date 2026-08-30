@@ -3,6 +3,7 @@ package event
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -166,16 +167,22 @@ func (e Event) Validate() error {
 // failure remains grouped across deployments and clients.
 func (e Event) Fingerprint() string {
 	parts := []string{
-		"error-tracer-v1",
+		"error-tracer-v2",
 		string(e.Kind),
 		e.Message,
 		e.SourceURL,
 		fmt.Sprintf("%d", e.Line),
 		fmt.Sprintf("%d", e.Column),
-		firstStackLine(e.Stack),
+		firstStackFrame(e.Stack),
 	}
-	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(digest[:])
+	hasher := sha256.New()
+	var length [binary.MaxVarintLen64]byte
+	for _, part := range parts {
+		size := binary.PutUvarint(length[:], uint64(len(part)))
+		_, _ = hasher.Write(length[:size])
+		_, _ = hasher.Write([]byte(part))
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
 }
 
 func (kind Kind) valid() bool {
@@ -203,13 +210,21 @@ func sanitizeURL(value string) string {
 	return parsed.String()
 }
 
-func firstStackLine(stack string) string {
+func firstStackFrame(stack string) string {
+	firstLine := ""
 	for line := range strings.SplitSeq(stack, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if firstLine == "" {
+			firstLine = line
+		}
+		if strings.HasPrefix(line, "at ") || strings.Contains(line, "@") {
 			return line
 		}
 	}
-	return ""
+	return firstLine
 }
 
 func bounded(field, value string, limit int) error {

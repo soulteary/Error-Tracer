@@ -148,6 +148,37 @@ func TestFingerprintUsesSourceAndLocation(t *testing.T) {
 	}
 }
 
+func TestFingerprintUsesFirstStackFrame(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack:   "Error: request failed\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request failed\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("different first stack frames produced the same fingerprint")
+	}
+
+	firefox := first
+	firefox.Stack = "checkout@https://example.com/app.js:10:2\nmain@https://example.com/app.js:20:1"
+	otherFirefox := firefox
+	otherFirefox.Stack = "payment@https://example.com/app.js:40:7"
+	if firefox.Fingerprint() == otherFirefox.Fingerprint() {
+		t.Fatal("different Firefox stack frames produced the same fingerprint")
+	}
+}
+
+func TestFingerprintEncodesFieldBoundaries(t *testing.T) {
+	first := Event{Kind: KindError, Message: "a\x00b", SourceURL: "c"}
+	second := Event{Kind: KindError, Message: "a", SourceURL: "b\x00c"}
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("ambiguous field boundaries produced the same fingerprint")
+	}
+}
+
 func TestFingerprintIgnoresURLQueryAfterNormalization(t *testing.T) {
 	first := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=1"}
 	second := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=2"}
