@@ -223,6 +223,16 @@ test("does not let reference definitions interrupt paragraphs", () => {
   ]);
 });
 
+test("keeps invalid backtick fence candidates in paragraphs", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "``` foo ` bar",
+    "[continued]: docs/not-a-definition.md",
+    "",
+    "[after-blank]: docs/after-blank.md",
+  ].join("\n")), ["docs/after-blank.md"]);
+});
+
 test("preserves lazy block-quote paragraph continuations", () => {
   assert.deepEqual(markdownTargets([
     "> Quoted paragraph",

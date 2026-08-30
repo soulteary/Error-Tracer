@@ -425,7 +425,8 @@ function paragraphOpenAfter(line, paragraphOpen) {
   if (/^(?: {4}|\t)/.test(value)) {
     return paragraphOpen;
   }
-  if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>|`{3,}|~{3,})/.test(value) ||
+  if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>)/.test(value) ||
+      fencedCodeOpening(value) ||
       /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
@@ -663,11 +664,11 @@ function withoutFencedCode(contents) {
       output.push("");
       continue;
     }
-    const opening = parsed.content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
-    if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
+    const opening = fencedCodeOpening(parsed.content);
+    if (opening) {
       fence = {
-        character: opening[1][0],
-        length: opening[1].length,
+        character: opening.character,
+        length: opening.length,
         containers: parsed.containers,
       };
       output.push("");
@@ -676,6 +677,14 @@ function withoutFencedCode(contents) {
     output.push(line);
   }
   return output.join("\n");
+}
+
+function fencedCodeOpening(content) {
+  const opening = content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+  if (!opening || (opening[1][0] === "`" && opening[2].includes("`"))) {
+    return null;
+  }
+  return { character: opening[1][0], length: opening[1].length };
 }
 
 function htmlBlockAt(content) {
