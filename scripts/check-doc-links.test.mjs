@@ -91,6 +91,15 @@ test("keeps a mixed-container fence open across a quote-only blank", () => {
   ].join("\n")), []);
 });
 
+test("ends an inner quote fence after an unmarked list blank", () => {
+  assert.deepEqual(markdownTargets([
+    "- > ```markdown",
+    "  > fenced code",
+    "",
+    "  > [new-quote]: docs/new-quote.md",
+  ].join("\n")), ["docs/new-quote.md"]);
+});
+
 test("ends an unclosed quote fence before a new quote block", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",

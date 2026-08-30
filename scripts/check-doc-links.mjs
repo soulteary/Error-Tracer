@@ -240,7 +240,9 @@ function blankWithinBlockContainers(line, containers) {
       continue;
     }
     if (!remaining.trim()) {
-      return true;
+      // A blank line may omit list indentation, but any inner quote
+      // containers must still be checked below.
+      continue;
     }
     remaining = stripIndent(remaining, container.indent);
     if (remaining === null) {
