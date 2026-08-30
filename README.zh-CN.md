@@ -224,7 +224,7 @@ Authorization: Bearer 替换为管理员令牌
 | `GET` | `/api/v1/issues/{fingerprint}/events` | 管理员 Bearer 令牌 | 读取保留的事件 |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 更新状态 |
 | `GET` | `/healthz` | 无 | 进程存活状态 |
-| `GET` | `/readyz` | 无 | 是否可以接收新工作 |
+| `GET` | `/readyz` | 无 | 是否可以接收新工作，包括实时 SQLite 读取探测 |
 | `GET` | `/metrics` | 无，启用后可用 | 低基数 Prometheus 指标 |
 
 ## 配置
@@ -251,9 +251,10 @@ Authorization: Bearer 替换为管理员令牌
 客户端仍可提交事件。
 
 启用保留策略后，Error-Tracer 会在启动时清理一次，之后每 24 小时清理一次。
-清理仅作用于当前项目，并依据 `last_seen` 判断；恰好位于截止时间的问题会被保留。
-SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文件，请在停机状态下另行
-执行 `VACUUM`。删除过期问题时也会级联删除其保留的事件记录。
+清理仅作用于当前项目、依据 `last_seen` 判断，并且每个事务最多删除 500 条；
+恰好位于截止时间的问题会被保留。SQLite 会复用删除后释放的页面。如果必须立即
+缩小数据库文件，请在停机状态下另行执行 `VACUUM`。删除过期问题时也会级联删除
+其保留的事件记录。
 
 ### SQLite 并发与备份
 
@@ -270,6 +271,20 @@ SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文�
 
 从只保存聚合数据的旧数据库升级时，事件历史初始为空；升级后的新事件会被保留，
 但无法从聚合行还原升级前的每次事件。
+
+就绪接口会执行有超时边界的实时读取；存储不可用时返回 `503`。Prometheus 输出
+同时提供综合状态 `error_tracer_ready` 和最近一次存储探测结果
+`error_tracer_store_ready`。可使用内置维护命令执行完整的快速一致性检查或创建
+在线一致快照：
+
+```sh
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db error-tracer db check
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db \
+  error-tracer db backup /backups/error-tracer.db
+```
+
+这两个命令不需要采集密钥或管理员令牌，并以只读方式打开源数据库。备份会包含
+已经提交到 WAL 的数据，在发布前检查新快照，并拒绝覆盖已有目标文件。
 
 ### 无访问空窗地轮换管理员令牌
 

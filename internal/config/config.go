@@ -46,10 +46,7 @@ func FromEnvironment() (Config, error) {
 	if address == "" {
 		address = defaultAddress
 	}
-	databasePath := strings.TrimSpace(os.Getenv("ERROR_TRACER_DATABASE_PATH"))
-	if databasePath == "" {
-		databasePath = defaultDatabasePath
-	}
+	databasePath := DatabasePathFromEnvironment()
 	sqliteConnections, err := positiveInteger(
 		"ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS", defaultSQLiteConnections, 32,
 	)
@@ -123,6 +120,17 @@ func FromEnvironment() (Config, error) {
 		DemoMode:                 demoMode,
 		RetentionDays:            retentionDays,
 	}, nil
+}
+
+// DatabasePathFromEnvironment returns the configured SQLite path without
+// requiring service credentials. Maintenance commands therefore do not need
+// ingestion or administration secrets.
+func DatabasePathFromEnvironment() string {
+	databasePath := strings.TrimSpace(os.Getenv("ERROR_TRACER_DATABASE_PATH"))
+	if databasePath == "" {
+		return defaultDatabasePath
+	}
+	return databasePath
 }
 
 func strictBoolean(name string, fallback bool) (bool, error) {

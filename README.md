@@ -266,7 +266,7 @@ history rows in the same transaction that records new events.
 | `GET` | `/api/v1/issues/{fingerprint}/events` | Admin bearer token | Read retained occurrences |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
 | `GET` | `/healthz` | None | Process liveness |
-| `GET` | `/readyz` | None | Readiness for new work |
+| `GET` | `/readyz` | None | Readiness for new work, including a live SQLite read |
 | `GET` | `/metrics` | None, when enabled | Low-cardinality Prometheus metrics |
 
 ## Configuration
@@ -293,11 +293,12 @@ An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
 
 When retention is enabled, Error-Tracer removes expired issues at startup and
-then every 24 hours. Cleanup is scoped to the configured project and uses
-`last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
-pages for later writes. Run an offline `VACUUM` only when the database file
-must be physically compacted immediately. Deleting an expired issue also
-deletes its retained event rows.
+then every 24 hours. Cleanup is scoped to the configured project, uses
+`last_seen`, and commits at most 500 deletions per transaction; an issue seen
+exactly at the cutoff is kept. SQLite reuses deleted pages for later writes.
+Run an offline `VACUUM` only when the database file must be physically
+compacted immediately. Deleting an expired issue also deletes its retained
+event rows.
 
 ### SQLite concurrency and backups
 
@@ -319,6 +320,23 @@ newer than it supports.
 Upgrading an existing aggregate-only database creates an empty occurrence
 history. New events are retained after the upgrade; past events cannot be
 reconstructed from the aggregate row.
+
+The readiness endpoint performs a bounded live read and returns `503` when the
+store is unavailable. The Prometheus output reports both the combined
+`error_tracer_ready` state and the latest `error_tracer_store_ready` result.
+Use the built-in maintenance commands for a full quick integrity check or a
+consistent online snapshot:
+
+```sh
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db error-tracer db check
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db \
+  error-tracer db backup /backups/error-tracer.db
+```
+
+These commands do not require ingestion or administration credentials. They
+open the source database read-only. Backup includes committed WAL data, checks
+the new snapshot before publishing it, and refuses to replace an existing
+destination.
 
 ### Rotate the admin token without an access gap
 

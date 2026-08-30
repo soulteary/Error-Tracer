@@ -62,6 +62,7 @@ func TestMetricsExposeBoundedPrometheusSeries(t *testing.T) {
 		"error_tracer_http_in_flight_requests 0",
 		"error_tracer_ingested_events_total 1",
 		"error_tracer_ready 1",
+		"error_tracer_store_ready 1",
 		"error_tracer_demo_enabled 0",
 	} {
 		if !strings.Contains(body, sample) {
