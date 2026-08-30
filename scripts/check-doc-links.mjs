@@ -47,12 +47,93 @@ export function markdownTargets(contents) {
   )) {
     targets.push(match[1].replace(/^<|>$/g, ""));
   }
-  for (const match of markdown.matchAll(
-    /^[ \t]{0,3}\[(?!\^)[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]{0,3})?(?:<([^>\n]+)>|([^\s]+))/gm,
-  )) {
-    targets.push(match[1] || match[2]);
+  const lines = markdown.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const definition = referenceDefinitionAt(lines, index);
+    if (definition) {
+      targets.push(definition.target);
+      index += definition.continued ? 1 : 0;
+    }
   }
   return targets;
+}
+
+function referenceDefinitionAt(lines, index) {
+  const line = stripBlockContainers(lines[index]);
+  const match = line.match(
+    /^[ \t]{0,3}\[(?!\^)((?:\\.|[^\]\\\n])+)\]:[ \t]*(.*)$/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  let remainder = match[2];
+  let continued = false;
+  if (!remainder.trim()) {
+    if (index + 1 >= lines.length) {
+      return null;
+    }
+    const continuation = stripBlockContainers(lines[index + 1]);
+    if (/^[ \t]{0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(continuation)) {
+      return null;
+    }
+    const continuationMatch = continuation.match(/^[ \t]{0,3}(\S.*)$/);
+    if (!continuationMatch) {
+      return null;
+    }
+    remainder = continuationMatch[1];
+    continued = true;
+  }
+
+  const target = referenceDestination(remainder);
+  return target === null ? null : { target, continued };
+}
+
+function referenceDestination(remainder) {
+  const value = remainder.trim();
+  let target;
+  let trailing;
+  if (value.startsWith("<")) {
+    const match = value.match(/^<((?:\\.|[^<>\\\n])*)>(.*)$/);
+    if (!match) {
+      return null;
+    }
+    target = match[1];
+    trailing = match[2].trim();
+  } else {
+    const match = value.match(/^(\S+)(.*)$/);
+    if (!match) {
+      return null;
+    }
+    target = match[1];
+    trailing = match[2].trim();
+  }
+
+  if (trailing && !referenceTitle(trailing)) {
+    return null;
+  }
+  return target;
+}
+
+function referenceTitle(value) {
+  return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/.test(value);
+}
+
+function stripBlockContainers(line) {
+  let remaining = line.replace(/\r$/, "");
+  while (true) {
+    const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+    if (quote) {
+      remaining = remaining.slice(quote[0].length);
+      continue;
+    }
+    const list = remaining.match(/^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/);
+    if (list) {
+      remaining = remaining.slice(list[0].length);
+      continue;
+    }
+    return remaining;
+  }
 }
 
 function isExternal(target) {
