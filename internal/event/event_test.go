@@ -183,6 +183,157 @@ func TestFingerprintUsesSourceAndLocation(t *testing.T) {
 	}
 }
 
+func TestFingerprintUsesFirstStackFrame(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack:   "Error: request failed\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request failed\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("different first stack frames produced the same fingerprint")
+	}
+
+	firefox := first
+	firefox.Stack = "checkout@https://example.com/app.js:10:2\nmain@https://example.com/app.js:20:1"
+	otherFirefox := firefox
+	otherFirefox.Stack = "payment@https://example.com/app.js:40:7"
+	if firefox.Fingerprint() == otherFirefox.Fingerprint() {
+		t.Fatal("different Firefox stack frames produced the same fingerprint")
+	}
+
+	safari := first
+	safari.Stack = "global code@https://example.com/app.js:10:2"
+	otherSafari := safari
+	otherSafari.Stack = "global code@https://example.com/app.js:40:7"
+	if safari.Fingerprint() == otherSafari.Fingerprint() {
+		t.Fatal("different Safari stack frames produced the same fingerprint")
+	}
+}
+
+func TestFingerprintSkipsAtSignInErrorHeader(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "request failed",
+		Stack:   "Error: request for alice@example.com failed\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request for alice@example.com failed\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("an at-sign in the error header hid different V8 stack frames")
+	}
+}
+
+func TestFingerprintSkipsNumericEmailSuffixInErrorHeader(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "connection failed",
+		Stack:   "Error: connect alice@example.com:443\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: connect alice@example.com:443\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("a numeric email suffix in the error header hid different V8 stack frames")
+	}
+}
+
+func TestFingerprintAcceptsAtSignsInsideFirefoxFrameURLs(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack: "Error: request failed\n" +
+			"run@webpack:///node_modules/@scope/pkg/app.js:10:2",
+	}
+	second := first
+	second.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/worker.js:40:7"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("an at-sign inside a Firefox frame URL hid different call sites")
+	}
+	cacheVariant := first
+	cacheVariant.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/app.js?v=2:10:2"
+	first.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/app.js?v=1:10:2"
+	if first.Fingerprint() != cacheVariant.Fingerprint() {
+		t.Fatal("a cache-busting scoped-package frame URL changed the fingerprint")
+	}
+}
+
+func TestFingerprintSkipsV8PseudoFramesWithoutCoordinates(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack: "Error: request failed\n" +
+			"    at async Promise.all (index 0)\n" +
+			"    at checkout (/app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request failed\n" +
+		"    at new Promise (<anonymous>)\n" +
+		"    at payment (/app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("coordinate-free V8 pseudo-frames hid different source call sites")
+	}
+}
+
+func TestFingerprintCanonicalizesStackFrameURL(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   "Error: boom\n    at run (https://example.com/app.js?v=1#old:10:2)",
+	}
+	second := first
+	second.Stack = "Error: boom\n    at run (https://example.com/app.js?v=2#new:10:2)"
+
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("a cache-busting stack-frame URL changed the fingerprint")
+	}
+
+	first.Stack = "run@https://example.com/app.js?v=1#old:10:2"
+	second.Stack = "run@https://example.com/app.js?v=2#new:10:2"
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("a cache-busting Firefox stack-frame URL changed the fingerprint")
+	}
+
+	first.Stack = "Error: boom\n    at run (https://example.com/app.js?cb=foo(1):10:2)"
+	second.Stack = "Error: boom\n    at run (https://example.com/app.js?cb=foo(2):10:2)"
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("parentheses inside a stack-frame query changed the fingerprint")
+	}
+}
+
+func TestFingerprintEncodesFieldBoundaries(t *testing.T) {
+	first := Event{Kind: KindError, Message: "a\x00b", SourceURL: "c"}
+	second := Event{Kind: KindError, Message: "a", SourceURL: "b\x00c"}
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("ambiguous field boundaries produced the same fingerprint")
+	}
+}
+
+func TestLegacyFingerprintMatchesTheV1Encoding(t *testing.T) {
+	captured := Event{
+		Kind:      KindError,
+		Message:   "boom",
+		SourceURL: "https://example.com/app.js",
+		Line:      10,
+		Column:    2,
+		Stack:     "Error: boom\n    at run (app.js:10:2)",
+	}
+
+	const want = "70f12ea2361e3f43b73102b04e669161acc3b4283eca455e262ea35d6e9a4e3b"
+	if got := captured.LegacyFingerprint(); got != want {
+		t.Fatalf("LegacyFingerprint() = %q, want v1 digest %q", got, want)
+	}
+}
+
 func TestFingerprintIgnoresURLQueryAfterNormalization(t *testing.T) {
 	first := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=1"}
 	second := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=2"}

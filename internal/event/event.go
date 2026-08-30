@@ -3,9 +3,11 @@ package event
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -166,6 +168,29 @@ func (e Event) Validate() error {
 // failure remains grouped across deployments and clients.
 func (e Event) Fingerprint() string {
 	parts := []string{
+		"error-tracer-v2",
+		string(e.Kind),
+		e.Message,
+		e.SourceURL,
+		fmt.Sprintf("%d", e.Line),
+		fmt.Sprintf("%d", e.Column),
+		firstStackFrame(e.Stack),
+	}
+	hasher := sha256.New()
+	var length [binary.MaxVarintLen64]byte
+	for _, part := range parts {
+		size := binary.PutUvarint(length[:], uint64(len(part)))
+		_, _ = hasher.Write(length[:size])
+		_, _ = hasher.Write([]byte(part))
+	}
+	return hex.EncodeToString(hasher.Sum(nil))
+}
+
+// LegacyFingerprint returns the v1 grouping key used by existing databases.
+// Persistent stores use it only to carry an issue's state and retained history
+// forward when that issue first recurs under the v2 fingerprint algorithm.
+func (e Event) LegacyFingerprint() string {
+	parts := []string{
 		"error-tracer-v1",
 		string(e.Kind),
 		e.Message,
@@ -206,6 +231,26 @@ func sanitizeURL(value string) string {
 	return parsed.String()
 }
 
+func firstStackFrame(stack string) string {
+	firstLine := ""
+	for line := range strings.SplitSeq(stack, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if firstLine == "" {
+			firstLine = line
+		}
+		if isV8StackFrame(line) {
+			return canonicalizeStackFrame(line)
+		}
+		if firefoxStackFramePattern.MatchString(line) {
+			return canonicalizeStackFrame(line)
+		}
+	}
+	return firstLine
+}
+
 func firstStackLine(stack string) string {
 	for line := range strings.SplitSeq(stack, "\n") {
 		if line = strings.TrimSpace(line); line != "" {
@@ -213,6 +258,57 @@ func firstStackLine(stack string) string {
 		}
 	}
 	return ""
+}
+
+var firefoxStackFramePattern = regexp.MustCompile(`^[^@:\r\n]*@\S+:\d+(?::\d+)?$`)
+
+func isV8StackFrame(frame string) bool {
+	if !strings.HasPrefix(frame, "at ") {
+		return false
+	}
+	_, location, _ := splitV8StackFrame(frame)
+	return stackPositionPattern.MatchString(location)
+}
+
+func canonicalizeStackFrame(frame string) string {
+	if strings.HasPrefix(frame, "at ") {
+		prefix, location, suffix := splitV8StackFrame(frame)
+		return prefix + canonicalizeStackLocation(location) + suffix
+	}
+
+	at := strings.IndexByte(frame, '@')
+	if at < 0 {
+		return frame
+	}
+	return frame[:at+1] + canonicalizeStackLocation(frame[at+1:])
+}
+
+func splitV8StackFrame(frame string) (prefix, location, suffix string) {
+	location = strings.TrimSpace(strings.TrimPrefix(frame, "at "))
+	open := -1
+	if strings.HasPrefix(location, "(") {
+		open = 0
+	} else if separator := strings.Index(location, " ("); separator >= 0 {
+		open = separator + 1
+	}
+	if open >= 0 && strings.HasSuffix(location, ")") {
+		return "at " + location[:open+1], location[open+1 : len(location)-1], ")"
+	}
+	return "at ", location, ""
+}
+
+var stackPositionPattern = regexp.MustCompile(`:\d+(?::\d+)?$`)
+
+func canonicalizeStackLocation(location string) string {
+	position := ""
+	if match := stackPositionPattern.FindStringIndex(location); match != nil {
+		position = location[match[0]:]
+		location = location[:match[0]]
+	}
+	if index := strings.IndexAny(location, "?#"); index >= 0 {
+		location = location[:index]
+	}
+	return location + position
 }
 
 func bounded(field, value string, limit int) error {

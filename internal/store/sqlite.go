@@ -62,6 +62,18 @@ CREATE INDEX events_issue_received_sequence
     ON events (project_id, fingerprint, received_at DESC, sequence DESC);
 `
 
+const sqliteFingerprintVersionSchema = `
+ALTER TABLE issues
+    ADD COLUMN fingerprint_version INTEGER NOT NULL DEFAULT 1
+        CHECK (fingerprint_version IN (1, 2));
+
+CREATE INDEX issues_legacy_fingerprint_lookup
+    ON issues (
+        project_id, fingerprint_version, kind, message, source_url,
+        line, column_number, fingerprint
+    );
+`
+
 type sqliteMigration struct {
 	version int
 	name    string
@@ -71,16 +83,19 @@ type sqliteMigration struct {
 var sqliteMigrations = []sqliteMigration{
 	{version: 1, name: "create issues", schema: sqliteInitialSchema},
 	{version: 2, name: "create event history", schema: sqliteEventHistorySchema},
+	{version: 3, name: "track fingerprint versions", schema: sqliteFingerprintVersionSchema},
 }
 
 var ErrSQLiteSchemaTooNew = errors.New("SQLite schema is newer than this Error-Tracer build")
 
 const sqliteUpsertIssue = `
 INSERT INTO issues (
-    project_id, fingerprint, kind, message, source_url, line, column_number,
+    project_id, fingerprint, fingerprint_version,
+    kind, message, source_url, line, column_number,
     status, occurrences, first_seen, last_seen, last_event
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+) VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
 ON CONFLICT (project_id, fingerprint) DO UPDATE SET
+    fingerprint_version = 2,
     occurrences = issues.occurrences + 1,
     first_seen = MIN(issues.first_seen, excluded.first_seen),
     status = CASE
@@ -97,6 +112,47 @@ ON CONFLICT (project_id, fingerprint) DO UPDATE SET
 const sqliteInsertEvent = `
 INSERT INTO events (project_id, fingerprint, event_id, received_at, payload)
 VALUES (?, ?, ?, ?, ?)
+`
+
+const sqliteMergeLegacyIssue = `
+INSERT INTO issues (
+    project_id, fingerprint, fingerprint_version,
+    kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+)
+SELECT
+    project_id, ?, 2, ?, ?, ?, ?, ?,
+    status, occurrences, first_seen, last_seen, last_event
+FROM issues
+WHERE project_id = ? AND fingerprint = ? AND fingerprint_version = 1
+ON CONFLICT (project_id, fingerprint) DO UPDATE SET
+    fingerprint_version = 2,
+    status = CASE
+        WHEN issues.status = 'ignored' OR excluded.status = 'ignored' THEN 'ignored'
+        WHEN issues.status = 'open' OR excluded.status = 'open' THEN 'open'
+        ELSE 'resolved'
+    END,
+    occurrences = issues.occurrences + excluded.occurrences,
+    first_seen = MIN(issues.first_seen, excluded.first_seen),
+    last_event = CASE
+        WHEN excluded.last_seen >= issues.last_seen THEN excluded.last_event
+        ELSE issues.last_event
+    END,
+    last_seen = MAX(issues.last_seen, excluded.last_seen)
+`
+
+const sqliteExactLegacyIssueCandidate = `
+SELECT fingerprint, last_event
+FROM issues
+WHERE project_id = ? AND fingerprint_version = 1 AND fingerprint = ?
+`
+
+const sqliteLegacyIssueCandidates = `
+SELECT fingerprint, last_event
+FROM issues
+WHERE project_id = ? AND fingerprint_version = 1
+  AND kind = ? AND message = ? AND source_url = ?
+  AND line = ? AND column_number = ? AND fingerprint <> ?
 `
 
 const sqliteTrimEvents = `
@@ -546,17 +602,38 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		}
 	}
 
-	transaction, err := s.db.BeginTx(ctx, nil)
+	connection, err := s.db.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("acquire record batch connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return nil, fmt.Errorf("begin record batch transaction: %w", err)
 	}
-	defer func() { _ = transaction.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	migratedFingerprints := make(map[string]struct{}, len(records))
+	for index, record := range records {
+		if _, migrated := migratedFingerprints[record.fingerprint]; migrated {
+			continue
+		}
+		if err := migrateLegacyIssueFingerprints(
+			ctx, connection, projectID, record.event, record.fingerprint,
+		); err != nil {
+			return nil, fmt.Errorf("migrate legacy fingerprint for event %d: %w", index, err)
+		}
+		migratedFingerprints[record.fingerprint] = struct{}{}
+	}
 
-	issueStatement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
+	issueStatement, err := connection.PrepareContext(ctx, sqliteUpsertIssue)
 	if err != nil {
 		return nil, fmt.Errorf("prepare issue batch: %w", err)
 	}
-	eventStatement, err := transaction.PrepareContext(ctx, sqliteInsertEvent)
+	eventStatement, err := connection.PrepareContext(ctx, sqliteInsertEvent)
 	if err != nil {
 		_ = issueStatement.Close()
 		return nil, fmt.Errorf("prepare event batch: %w", err)
@@ -592,7 +669,7 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		return nil, fmt.Errorf("close issue batch statement: %w", err)
 	}
 	for fingerprint := range touched {
-		if _, err := transaction.ExecContext(
+		if _, err := connection.ExecContext(
 			ctx, sqliteTrimEvents, projectID, fingerprint, s.maxEventsPerIssue,
 		); err != nil {
 			return nil, fmt.Errorf("trim event history for %s: %w", fingerprint, err)
@@ -604,7 +681,7 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 	for index, record := range records {
 		issue, exists := issuesByFingerprint[record.fingerprint]
 		if !exists {
-			issue, err = queryIssue(ctx, transaction, projectID, record.fingerprint)
+			issue, err = queryIssue(ctx, connection, projectID, record.fingerprint)
 			if err != nil {
 				return nil, fmt.Errorf("read issue for event %d: %w", index, err)
 			}
@@ -612,10 +689,97 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		}
 		issues[index] = issue
 	}
-	if err := transaction.Commit(); err != nil {
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, fmt.Errorf("commit record batch transaction: %w", err)
 	}
+	committed = true
 	return issues, nil
+}
+
+type sqliteReadWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func migrateLegacyIssueFingerprints(
+	ctx context.Context,
+	transaction sqliteReadWriter,
+	projectID string,
+	captured event.Event,
+	fingerprint string,
+) error {
+	type legacyIssueCandidate struct {
+		fingerprint string
+		lastEvent   event.Event
+	}
+	candidates := make([]legacyIssueCandidate, 0)
+	collect := func(query string, arguments ...any) error {
+		rows, err := transaction.QueryContext(ctx, query, arguments...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var candidate legacyIssueCandidate
+			var encoded []byte
+			if err := rows.Scan(&candidate.fingerprint, &encoded); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan candidate: %w", err)
+			}
+			if err := json.Unmarshal(encoded, &candidate.lastEvent); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("decode candidate %s: %w", candidate.fingerprint, err)
+			}
+			if candidate.lastEvent.LegacyFingerprint() == candidate.fingerprint &&
+				candidate.lastEvent.Fingerprint() == fingerprint {
+				candidates = append(candidates, candidate)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate candidates: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close candidates: %w", err)
+		}
+		return nil
+	}
+	legacyFingerprint := captured.LegacyFingerprint()
+	if err := collect(
+		sqliteExactLegacyIssueCandidate, projectID, legacyFingerprint,
+	); err != nil {
+		return fmt.Errorf("find exact legacy issue candidate: %w", err)
+	}
+	if err := collect(
+		sqliteLegacyIssueCandidates,
+		projectID, captured.Kind, captured.Message, captured.SourceURL,
+		captured.Line, captured.Column, legacyFingerprint,
+	); err != nil {
+		return fmt.Errorf("find grouped legacy issue candidates: %w", err)
+	}
+	for _, candidate := range candidates {
+		if _, err := transaction.ExecContext(
+			ctx, sqliteMergeLegacyIssue,
+			fingerprint, captured.Kind, captured.Message, captured.SourceURL,
+			captured.Line, captured.Column, projectID, candidate.fingerprint,
+		); err != nil {
+			return fmt.Errorf("merge legacy issue %s: %w", candidate.fingerprint, err)
+		}
+		if _, err := transaction.ExecContext(
+			ctx,
+			"UPDATE events SET fingerprint = ? WHERE project_id = ? AND fingerprint = ?",
+			fingerprint, projectID, candidate.fingerprint,
+		); err != nil {
+			return fmt.Errorf("move legacy event history for %s: %w", candidate.fingerprint, err)
+		}
+		if _, err := transaction.ExecContext(
+			ctx,
+			"DELETE FROM issues WHERE project_id = ? AND fingerprint = ?",
+			projectID, candidate.fingerprint,
+		); err != nil {
+			return fmt.Errorf("remove legacy issue %s: %w", candidate.fingerprint, err)
+		}
+	}
+	return nil
 }
 
 // GetIssue returns one issue from one project.
