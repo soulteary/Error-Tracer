@@ -305,15 +305,15 @@ ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db \
 
 ## 本地开发
 
-模块声明 Go 1.27。仅运行浏览器 SDK 测试时需要 Node.js 22 或更高版本。
+模块声明 Go 1.27。运行浏览器 SDK 测试和文档检查时需要 Bun 1.4.0 或更高版本。
 
 ```sh
 go mod verify
 go vet ./...
 go test ./...
 go test -race ./...
-npm test
-npm run check:docs
+bun test
+bun run check:docs
 ```
 
 从源码运行：
