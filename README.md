@@ -335,8 +335,12 @@ first recurs, SQLite locates every v1 aggregate whose last event belongs to the
 same v2 group, then atomically merges those aggregates and their retained event
 histories before recording the new occurrence. This preserves status, lifetime
 counts, and timestamps even when cache-busting frame URLs produced several v1
-keys. A v1 issue that has not recurred remains visible under its existing
-fingerprint until that lazy migration is needed.
+keys. Schema v3 persistently marks v1/v2 rows and indexes the bounded legacy
+lookup, so normal ingestion does not scan the project's issue history and
+already migrated groups are skipped. The exact v1 key is also checked directly
+to cover aggregates created by the old NUL-delimited collision. A v1 issue that
+has not recurred remains visible under its existing fingerprint until that lazy
+migration is needed.
 
 The readiness endpoint performs a bounded live read of SQLite's required schema
 and returns `503` when the store or an operational table is unavailable. The

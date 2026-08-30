@@ -175,6 +175,57 @@ VALUES (?, ?, ?, ?, ?)
 	}
 }
 
+func TestSQLiteRecordFindsANULLCollisionByItsExactV1Key(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 30, 19, 0, 0, 0, time.UTC)
+	first := testEvent(base)
+	first.Message = "a\x00b"
+	first.SourceURL = "c"
+	later := first
+	later.ID = "legacy-collision-latest"
+	later.Message = "a"
+	later.SourceURL = "b\x00c"
+	if first.LegacyFingerprint() != later.LegacyFingerprint() ||
+		first.Fingerprint() == later.Fingerprint() {
+		t.Fatal("test events must collide in v1 and separate in v2")
+	}
+	payload, err := json.Marshal(later)
+	if err != nil {
+		t.Fatalf("encode colliding legacy event: %v", err)
+	}
+	if _, err := database.db.Exec(`
+INSERT INTO issues (
+    project_id, fingerprint, kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`,
+		"project-a", first.LegacyFingerprint(), first.Kind, first.Message,
+		first.SourceURL, first.Line, first.Column, IssueStatusIgnored, 2,
+		base.Add(-time.Minute).UnixNano(), base.UnixNano(), payload,
+	); err != nil {
+		t.Fatalf("seed colliding v1 issue: %v", err)
+	}
+
+	recurrence := later
+	recurrence.ID = "v2-collision-recurrence"
+	recurrence.ReceivedAt = base.Add(time.Minute)
+	issue, err := database.Record(context.Background(), "project-a", recurrence)
+	if err != nil {
+		t.Fatalf("record colliding recurrence: %v", err)
+	}
+	if issue.Fingerprint != recurrence.Fingerprint() ||
+		issue.Message != recurrence.Message || issue.SourceURL != recurrence.SourceURL ||
+		issue.Status != IssueStatusIgnored || issue.Occurrences != 3 {
+		t.Fatalf("migrated collision issue = %#v", issue)
+	}
+	if _, err := database.GetIssue(
+		context.Background(), "project-a", first.LegacyFingerprint(),
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("colliding v1 issue lookup error = %v, want ErrIssueNotFound", err)
+	}
+}
+
 func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
 	ctx := context.Background()
 	newPath := filepath.Join(t.TempDir(), "new.db")
@@ -183,8 +234,8 @@ func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
 	if err := created.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read new database schema version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("new database schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("new database schema version = %d, want 3", version)
 	}
 	if err := created.Close(); err != nil {
 		t.Fatalf("close new database: %v", err)
@@ -216,8 +267,8 @@ func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
 	if err := migrated.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		t.Fatalf("read migrated schema version: %v", err)
 	}
-	if version != 2 {
-		t.Fatalf("migrated schema version = %d, want 2", version)
+	if version != 3 {
+		t.Fatalf("migrated schema version = %d, want 3", version)
 	}
 	var message string
 	if err := migrated.db.QueryRowContext(
@@ -227,6 +278,61 @@ func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
 	}
 	if message != "preserved" {
 		t.Fatalf("preserved message = %q, want preserved", message)
+	}
+	var fingerprintVersion int
+	if err := migrated.db.QueryRowContext(
+		ctx, "SELECT fingerprint_version FROM issues WHERE project_id = 'project-a'",
+	).Scan(&fingerprintVersion); err != nil {
+		t.Fatalf("read adopted fingerprint version: %v", err)
+	}
+	if fingerprintVersion != 1 {
+		t.Fatalf("adopted fingerprint version = %d, want 1", fingerprintVersion)
+	}
+	v2Event := testEvent(time.Now().UTC())
+	v2Event.Message = "new v2 issue"
+	if _, err := migrated.Record(ctx, "project-a", v2Event); err != nil {
+		t.Fatalf("record v2 issue after migration: %v", err)
+	}
+	if err := migrated.db.QueryRowContext(
+		ctx,
+		"SELECT fingerprint_version FROM issues WHERE project_id = ? AND fingerprint = ?",
+		"project-a", v2Event.Fingerprint(),
+	).Scan(&fingerprintVersion); err != nil {
+		t.Fatalf("read new fingerprint version: %v", err)
+	}
+	if fingerprintVersion != 2 {
+		t.Fatalf("new fingerprint version = %d, want 2", fingerprintVersion)
+	}
+}
+
+func TestSQLiteLegacyCandidateLookupUsesTheVersionedIndex(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	rows, err := database.db.QueryContext(
+		context.Background(),
+		"EXPLAIN QUERY PLAN "+sqliteLegacyIssueCandidates,
+		"project-a", event.KindError, "boom", "https://example.com/app.js", 10, 2,
+		"legacy-fingerprint",
+	)
+	if err != nil {
+		t.Fatalf("explain legacy candidate lookup: %v", err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatalf("scan legacy candidate query plan: %v", err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate legacy candidate query plan: %v", err)
+	}
+	plan := strings.ToLower(strings.Join(details, "\n"))
+	if !strings.Contains(plan, "issues_legacy_fingerprint_lookup") {
+		t.Fatalf("legacy candidate lookup does not use its versioned index:\n%s", plan)
 	}
 }
 
