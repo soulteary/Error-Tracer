@@ -697,8 +697,10 @@ test("flush reserves the events queued when it is called", async () => {
   const firstCapture = client.captureMessage("one");
   assert.equal(await client.captureMessage("two"), true);
   const flush = client.flush();
-  assert.equal(await client.captureMessage("three"), true);
-  assert.equal(client.getStats().dropped, 0);
+  assert.equal(await client.captureMessage("three"), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 1, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+  });
 
   releaseFirst(true);
   assert.equal(await firstCapture, true);
@@ -707,9 +709,48 @@ test("flush reserves the events queued when it is called", async () => {
   assert.equal(await client.flush(), true);
   assert.deepEqual(
     payloads.flatMap((payload) => payload.events.map((event) => event.message)),
-    ["one", "two", "three"],
+    ["one", "two"],
   );
-  assert.equal(client.getStats().dropped, 0);
+  assert.equal(client.getStats().dropped, 1);
+});
+
+test("bounds snapshots reserved behind a stalled delivery", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 3,
+    maxQueueSize: 3,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("one"), true);
+  const firstFlush = client.flush();
+  for (const message of ["two", "three", "four"]) {
+    assert.equal(await client.captureMessage(message), true);
+    client.flush();
+  }
+  assert.equal(await client.captureMessage("five"), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 3, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstFlush, true);
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three", "four"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 4, dropped: 1, failed: 0, batches: 4, retries: 0,
+  });
 });
 
 test("retries failed batches with a finite budget", async () => {

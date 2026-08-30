@@ -112,6 +112,10 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 2 次。可通过 `batchSize`、`flushInterval`、`maxQueueSize`、`maxRetries`、
 `retryBaseDelay` 和 `maxBatchBytes` 调整这些边界。
 
+队列上限包含等待当前传输完成的已保留快照；正在传输的事件本身不计入该上限，
+但重复的定时或显式 flush 无法形成无界的链式积压。`getStats().queued` 会同时统计
+普通队列和这些已保留快照。
+
 `maxBatchBytes` 默认为 60 KiB，以满足不同浏览器对 `sendBeacon`/fetch
 keepalive 请求体的通用限制。可以配置更大的值，但超过 keepalive 边界的载荷
 会改用普通 fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。

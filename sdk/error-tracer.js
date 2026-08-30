@@ -92,6 +92,7 @@
       this.transport = options.transport ||
         defaultTransport(this.runtime, this.batchEndpoint);
       this.queue = [];
+      this.reservedCount = 0;
       this.flushTimer = null;
       this.flushPromise = null;
       this.stats = {
@@ -305,7 +306,9 @@
         return Promise.resolve(false);
       }
 
-      this.enqueue(captured);
+      if (!this.enqueue(captured)) {
+        return Promise.resolve(false);
+      }
       if (this.queue.length >= this.batchSize) {
         if (this.flushPromise) {
           return Promise.resolve(true);
@@ -375,11 +378,16 @@
     }
 
     enqueue(captured) {
-      if (this.queue.length >= this.maxQueueSize) {
+      if (this.queue.length + this.reservedCount >= this.maxQueueSize) {
+        if (!this.queue.length) {
+          this.stats.dropped++;
+          return false;
+        }
         this.queue.shift();
         this.stats.dropped++;
       }
       this.queue.push(cloneEvent(captured));
+      return true;
     }
 
     flush() {
@@ -389,10 +397,21 @@
       }
       const pending = this.queue.splice(0);
       const active = this.flushPromise;
+      if (active) {
+        this.reservedCount += pending.length;
+      }
+      const send = () => {
+        if (active) {
+          this.reservedCount -= pending.length;
+        }
+        return this.sendPending(pending);
+      };
       const delivery = active
-        ? active.then((accepted) =>
-          this.sendPending(pending).then((drained) => accepted && drained))
-        : this.sendPending(pending);
+        ? active.then(
+          (accepted) => send().then((drained) => accepted && drained),
+          () => send().then(() => false),
+        )
+        : send();
       let tracked;
       tracked = delivery.finally(() => {
         if (this.flushPromise !== tracked) {
@@ -543,7 +562,7 @@
 
     getStats() {
       return Object.freeze({
-        queued: this.queue.length,
+        queued: this.queue.length + this.reservedCount,
         sent: this.stats.sent,
         dropped: this.stats.dropped,
         failed: this.stats.failed,

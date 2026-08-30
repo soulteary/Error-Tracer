@@ -126,6 +126,11 @@ retried twice with exponential backoff. These bounds can be changed with
 `batchSize`, `flushInterval`, `maxQueueSize`, `maxRetries`,
 `retryBaseDelay`, and `maxBatchBytes`.
 
+The queue bound includes snapshots waiting behind an active transport. An
+event already being delivered is excluded, but repeated timer or explicit
+flushes cannot create an unbounded chained backlog. `getStats().queued` reports
+both the ordinary queue and those reserved snapshots.
+
 `maxBatchBytes` defaults to 60 KiB so unload-time requests stay within the
 portable `sendBeacon`/fetch keepalive budget. A larger custom value is allowed,
 but payloads above that keepalive budget use a normal fetch and therefore need
