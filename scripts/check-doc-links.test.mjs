@@ -34,6 +34,25 @@ test("ignores reference definitions in fenced code", () => {
   ].join("\n")), []);
 });
 
+test("ignores HTML blocks and resumes after their terminators", () => {
+  assert.deepEqual(markdownTargets([
+    "<script></script>",
+    "[after-inline]: docs/after-inline.md",
+    "<style>",
+    "[inside-style]: docs/not-style.md",
+    "</style>",
+    "[after-style]: docs/after-style.md",
+    "<!--",
+    "[inside-comment]: docs/not-comment.md",
+    "-->",
+    "[after-comment]: docs/after-comment.md",
+  ].join("\n")), [
+    "docs/after-inline.md",
+    "docs/after-style.md",
+    "docs/after-comment.md",
+  ]);
+});
+
 test("ignores fenced code nested in block containers", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",

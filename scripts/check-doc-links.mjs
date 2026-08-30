@@ -48,8 +48,9 @@ export function markdownTargets(contents) {
     targets.push(match[1].replace(/^<|>$/g, ""));
   }
   const lines = markdown.split("\n");
+  const paragraphCache = new Map();
   for (let index = 0; index < lines.length; index++) {
-    const definition = referenceDefinitionAt(lines, index);
+    const definition = referenceDefinitionAt(lines, index, true, paragraphCache);
     if (definition) {
       targets.push(definition.target);
       index += definition.consumed;
@@ -58,17 +59,25 @@ export function markdownTargets(contents) {
   return targets;
 }
 
-function referenceDefinitionAt(lines, index, checkParagraphInterruption = true) {
+function referenceDefinitionAt(
+  lines,
+  index,
+  checkParagraphInterruption = true,
+  paragraphCache = null,
+) {
   const parsedLine = parseBlockContainers(lines[index]);
-  if (checkParagraphInterruption &&
-      (orderedListInterruptsParagraph(lines, index, parsedLine.containers) ||
-       paragraphOpenBefore(lines, index, parsedLine.containers))) {
-    return null;
-  }
   const match = parsedLine.content.match(
     /^[ \t]{0,3}\[(?!\^)((?:\\.|[^\]\\\n])+)\]:[ \t]*(.*)$/,
   );
   if (!match) {
+    return null;
+  }
+  if (checkParagraphInterruption &&
+      (orderedListInterruptsParagraph(
+        lines, index, parsedLine.containers, paragraphCache,
+      ) || paragraphOpenBefore(
+        lines, index, parsedLine.containers, paragraphCache,
+      ))) {
     return null;
   }
 
@@ -242,7 +251,7 @@ function listMarkerPrefix(value) {
   };
 }
 
-function orderedListInterruptsParagraph(lines, index, containers) {
+function orderedListInterruptsParagraph(lines, index, containers, paragraphCache) {
   const listIndex = containers.findIndex((container) =>
     container.type === "list" &&
     container.orderedStart !== null &&
@@ -250,29 +259,41 @@ function orderedListInterruptsParagraph(lines, index, containers) {
   if (listIndex < 0) {
     return false;
   }
-  return paragraphOpenBefore(lines, index, containers.slice(0, listIndex));
+  return paragraphOpenBefore(
+    lines, index, containers.slice(0, listIndex), paragraphCache,
+  );
 }
 
-function paragraphOpenBefore(lines, index, containers) {
-  let paragraphOpen = false;
-  for (let previous = 0; previous < index; previous++) {
+function paragraphOpenBefore(lines, index, containers, paragraphCache) {
+  const cache = paragraphCache || new Map();
+  const key = containers.map((container) => container.type === "quote"
+    ? "quote"
+    : `list:${container.indent}:${container.orderedStart ?? "bullet"}`).join("/");
+  let state = cache.get(key);
+  if (!state || state.index > index) {
+    state = { index: 0, paragraphOpen: false };
+    cache.set(key, state);
+  }
+  while (state.index < index) {
+    const previous = state.index;
+    state.index++;
     const content = continueBlockContainers(lines[previous], containers);
     if (content === null) {
-      paragraphOpen = false;
+      state.paragraphOpen = false;
       continue;
     }
-    const nextParagraphOpen = paragraphOpenAfter(content, paragraphOpen);
-    if (!paragraphOpen || !nextParagraphOpen) {
+    const nextParagraphOpen = paragraphOpenAfter(content, state.paragraphOpen);
+    if (!state.paragraphOpen || !nextParagraphOpen) {
       const definition = referenceDefinitionAt(lines, previous, false);
       if (definition) {
-        paragraphOpen = false;
-        previous += definition.consumed;
+        state.paragraphOpen = false;
+        state.index += definition.consumed;
         continue;
       }
     }
-    paragraphOpen = nextParagraphOpen;
+    state.paragraphOpen = nextParagraphOpen;
   }
-  return paragraphOpen;
+  return state.paragraphOpen;
 }
 
 function paragraphOpenAfter(line, paragraphOpen) {
@@ -370,6 +391,7 @@ function isExternal(target) {
 
 function withoutFencedCode(contents) {
   let fence = null;
+  let htmlBlock = null;
   return contents.split("\n").map((line) => {
     if (fence) {
       const content = continueBlockContainers(line, fence.containers);
@@ -386,7 +408,31 @@ function withoutFencedCode(contents) {
       fence = null;
     }
 
+    if (htmlBlock) {
+      const content = continueBlockContainers(line, htmlBlock.containers);
+      if (content !== null) {
+        if (htmlBlock.terminator.test(content)) {
+          htmlBlock = null;
+        }
+        return "";
+      }
+      if (blankWithinBlockContainers(line, htmlBlock.containers)) {
+        return "";
+      }
+      htmlBlock = null;
+    }
+
     const parsed = parseBlockContainers(line);
+    const openingHTML = htmlBlockAt(parsed.content);
+    if (openingHTML) {
+      if (!openingHTML.terminator.test(parsed.content)) {
+        htmlBlock = {
+          terminator: openingHTML.terminator,
+          containers: parsed.containers,
+        };
+      }
+      return "";
+    }
     const opening = parsed.content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
     if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
       fence = {
@@ -398,6 +444,26 @@ function withoutFencedCode(contents) {
     }
     return line;
   }).join("\n");
+}
+
+function htmlBlockAt(content) {
+  const typeOne = content.match(/^ {0,3}<(script|pre|style|textarea)(?:[ \t]|>|$)/i);
+  if (typeOne) {
+    return { terminator: new RegExp(`</${typeOne[1]}[ \\t]*>`, "i") };
+  }
+  if (/^ {0,3}<!--/.test(content)) {
+    return { terminator: /-->/ };
+  }
+  if (/^ {0,3}<\?/.test(content)) {
+    return { terminator: /\?>/ };
+  }
+  if (/^ {0,3}<!\[CDATA\[/.test(content)) {
+    return { terminator: /\]\]>/ };
+  }
+  if (/^ {0,3}<![A-Z]/.test(content)) {
+    return { terminator: />/ };
+  }
+  return null;
 }
 
 function run() {
