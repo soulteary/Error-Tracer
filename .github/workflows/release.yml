@@ -1,0 +1,225 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "release-${{ github.ref }}"
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, attest, and publish
+    if: github.repository == 'soulteary/Error-Tracer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      attestations: write
+      artifact-metadata: write
+      contents: write
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
+      - name: Validate release identity
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tags must use vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          expected="$(tr -d '[:space:]' < VERSION)"
+          package_version="$(node -p 'require("./package.json").version')"
+          if [[ "${version}" != "${expected}" || "${version}" != "${package_version}" ]]; then
+            echo "tag, VERSION, and package.json version must match" >&2
+            exit 1
+          fi
+          release_date="$(awk -v heading="## [${version}] - " \
+            'index($0, heading) == 1 { print substr($0, length(heading) + 1); exit }' \
+            CHANGELOG.md)"
+          if [[ ! "${release_date}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "the changelog release heading must replace Unreleased with YYYY-MM-DD" >&2
+            exit 1
+          fi
+          source_epoch="$(git show -s --format=%ct HEAD)"
+          build_date="$(date -u -d "@${source_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "SOURCE_DATE_EPOCH=${source_epoch}" >> "${GITHUB_ENV}"
+          echo "BUILD_DATE=${build_date}" >> "${GITHUB_ENV}"
+          echo "IMAGE=${image}" >> "${GITHUB_ENV}"
+          echo "MAJOR=${version%%.*}" >> "${GITHUB_ENV}"
+          echo "MINOR=${version%.*}" >> "${GITHUB_ENV}"
+
+      - name: Verify source
+        run: |
+          go mod verify
+          go test ./...
+          go test -race ./...
+          npm test
+
+      - name: Build reproducible release archives
+        run: scripts/build-release.sh "${VERSION}" dist
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          file: dist/error-tracer_${{ env.VERSION }}_linux_amd64/error-tracer
+          format: spdx-json
+          output-file: dist/error-tracer_${{ env.VERSION }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip ./*.spdx.json ./release-manifest.txt | \
+            sort --key=2 > checksums.txt
+
+      - name: Preserve release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: error-tracer-${{ env.VERSION }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.spdx.json
+            dist/checksums.txt
+            dist/release-manifest.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Attest release provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: Create or refresh draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          assets=(dist/*.tar.gz dist/*.zip dist/*.spdx.json dist/checksums.txt dist/release-manifest.txt)
+          draft="$(gh release view "${GITHUB_REF_NAME}" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [[ "${draft}" == "false" ]]; then
+            echo "refusing to replace an already published release" >&2
+            exit 1
+          fi
+          if [[ "${draft}" == "true" ]]; then
+            gh release upload "${GITHUB_REF_NAME}" "${assets[@]}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" "${assets[@]}" --draft \
+              --generate-notes --title "Error-Tracer ${VERSION}" --verify-tag
+          fi
+
+      - name: Set up release image builder
+        shell: bash
+        run: |
+          docker buildx create --driver docker-container --name error-tracer-release --use
+          docker buildx inspect --bootstrap
+
+      - name: Build and smoke-test release candidate
+        shell: bash
+        run: |
+          candidate="error-tracer-release-candidate:${VERSION}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "COMMIT=${GITHUB_SHA}" \
+            --build-arg "BUILD_DATE=${BUILD_DATE}" \
+            --tag "${candidate}" \
+            --load .
+          container_id="$(docker run --detach --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges:true --publish 127.0.0.1::8080 \
+            "${candidate}" demo)"
+          cleanup() {
+            docker logs "${container_id}" || true
+            docker rm --force "${container_id}" >/dev/null || true
+          }
+          trap cleanup EXIT
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error \
+              "http://127.0.0.1:${host_port}/api/v1/meta" > /tmp/error-tracer-candidate-meta.json; then
+              break
+            fi
+            sleep 0.5
+          done
+          grep --fixed-strings "\"version\":\"${VERSION}\"" /tmp/error-tracer-candidate-meta.json
+          grep --fixed-strings '"demo_only":true' /tmp/error-tracer-candidate-meta.json
+
+      - name: Publish versioned multi-architecture image
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "${GH_TOKEN}" | docker login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg "VERSION=${VERSION}" \
+            --build-arg "COMMIT=${GITHUB_SHA}" \
+            --build-arg "BUILD_DATE=${BUILD_DATE}" \
+            --tag "${IMAGE}:${VERSION}" \
+            --attest type=provenance,mode=max \
+            --attest type=sbom \
+            --push .
+
+      - name: Smoke-test the published demo
+        shell: bash
+        run: |
+          container_id="$(docker run --detach --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges:true --publish 127.0.0.1::8080 \
+            --pull=always "${IMAGE}:${VERSION}" demo)"
+          cleanup() {
+            docker logs "${container_id}" || true
+            docker rm --force "${container_id}" >/dev/null || true
+          }
+          trap cleanup EXIT
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error \
+              "http://127.0.0.1:${host_port}/api/v1/meta" > /tmp/error-tracer-meta.json; then
+              break
+            fi
+            sleep 0.5
+          done
+          grep --fixed-strings "\"version\":\"${VERSION}\"" /tmp/error-tracer-meta.json
+          grep --fixed-strings '"demo_only":true' /tmp/error-tracer-meta.json
+
+      - name: Promote verified image aliases
+        shell: bash
+        run: |
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${MINOR}" \
+            --tag "${IMAGE}:${MAJOR}" \
+            --tag "${IMAGE}:latest" \
+            "${IMAGE}:${VERSION}"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --draft=false --latest

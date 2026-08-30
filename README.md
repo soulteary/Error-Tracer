@@ -32,23 +32,29 @@ tag. It is not part of the current runtime.
 
 ## Try the demo without configuration
 
-Run the product tour directly from the source tree:
+The published v2 container is the shortest path to the product tour:
+
+```sh
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+```
+
+Open <http://127.0.0.1:8080/>. The dashboard immediately enters the built-in
+read-only sample workspace. The command does not require credentials, does not
+open SQLite, and does not register event ingestion or admin issue routes.
+
+The same tour can run directly from the source tree:
 
 ```sh
 go run ./cmd/error-tracer demo
 ```
 
-Then open <http://127.0.0.1:8080/>. The dashboard enters the built-in read-only
-sample workspace immediately. This command does not require credentials, does
-not open SQLite, and does not register the event ingestion or admin issue
-routes.
-
-The same isolated tour can run from the container image:
-
-```sh
-docker build -t error-tracer:demo .
-docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
-```
+The process prints the direct demo URL at startup. Prebuilt binaries for Linux,
+macOS, and Windows are attached to each
+[GitHub release](https://github.com/soulteary/Error-Tracer/releases) together
+with checksums, an SBOM, and provenance attestations. Run `error-tracer version`
+to identify a binary before starting its demo.
 
 ## Quick start with Docker Compose
 
@@ -228,7 +234,7 @@ embedded dashboard uses cursor pagination.
 | --- | --- | --- | --- |
 | `GET` | `/` | None | Dashboard shell; live data calls require an admin token |
 | `GET` | `/assets/error-tracer.js` | None | Embedded browser SDK |
-| `GET` | `/api/v1/meta` | None | Public demo availability and demo-only mode flags |
+| `GET` | `/api/v1/meta` | None | Public service version and demo-mode flags |
 | `GET` | `/api/v1/demo/issues` | None, demo mode only | List built-in read-only demo issues |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | None, demo mode only | Read one built-in demo issue |
 | `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |
@@ -325,8 +331,12 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 
 ## Documentation
 
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
 - [Demo mode and its security boundary](docs/demo.md)
 - [Performance benchmarks and load testing](docs/performance.md)
+- [Maintainer release process](docs/releasing.md)
+- [Security policy](SECURITY.md)
 - [Simplified Chinese README](README.zh-CN.md)
 
 ## Deployment notes

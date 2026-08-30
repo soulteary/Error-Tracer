@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/soulteary/Error-Tracer/internal/buildinfo"
 	"github.com/soulteary/Error-Tracer/internal/config"
 	"github.com/soulteary/Error-Tracer/internal/healthcheck"
 	appserver "github.com/soulteary/Error-Tracer/internal/server"
@@ -33,6 +36,9 @@ func run() int {
 			return 0
 		case "demo":
 			return runDemo()
+		case "version":
+			fmt.Println(buildinfo.Summary())
+			return 0
 		}
 	}
 
@@ -76,8 +82,23 @@ func run() int {
 
 func runDemo() int {
 	address := demoAddress(os.Getenv("ERROR_TRACER_ADDRESS"))
+	slog.Info("demo workspace available", "url", demoURL(address))
 	app := appserver.New(appserver.Options{DemoOnly: true})
 	return serve(app, address, 10*time.Second, nil, true)
+}
+
+func demoURL(address string) string {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return "http://" + address + "/?demo=1"
+	}
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/?demo=1"
 }
 
 func demoAddress(value string) string {
@@ -123,7 +144,11 @@ func serve(
 		}
 	}()
 
-	slog.Info("starting Error-Tracer", "address", address, "demo_only", demoOnly)
+	info := buildinfo.Current()
+	slog.Info(
+		"starting Error-Tracer", "address", address, "demo_only", demoOnly,
+		"version", info.Version, "commit", info.Commit,
+	)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped unexpectedly", "error", err)
 		return 1

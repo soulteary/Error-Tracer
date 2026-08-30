@@ -1,6 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
-FROM golang:1.27.0-bookworm AS build
+ARG VERSION=2.0.0-dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
+
+FROM --platform=$BUILDPLATFORM golang:1.27.0-bookworm AS build
+
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
 
 WORKDIR /src
 
@@ -14,14 +22,23 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/error-tracer ./cmd/error-tracer && \
+    go build -trimpath -buildvcs=false \
+    -ldflags="-s -w -X github.com/soulteary/Error-Tracer/internal/buildinfo.version=${VERSION} -X github.com/soulteary/Error-Tracer/internal/buildinfo.commit=${COMMIT} -X github.com/soulteary/Error-Tracer/internal/buildinfo.builtAt=${BUILD_DATE}" \
+    -o /out/error-tracer ./cmd/error-tracer && \
     mkdir -p /out/data
 
 FROM scratch
 
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
+
 LABEL org.opencontainers.image.source="https://github.com/soulteary/Error-Tracer" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.title="Error-Tracer"
+      org.opencontainers.image.title="Error-Tracer" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 COPY --from=build --chown=65532:65532 /out/error-tracer /error-tracer
 COPY --from=build --chown=65532:65532 /out/data /data

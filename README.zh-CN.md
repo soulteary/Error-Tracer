@@ -28,22 +28,27 @@ Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服�
 
 ## 无配置查看演示
 
-在源码目录直接启动只读产品演示：
+使用已经发布的 v2 容器是查看产品演示的最短路径：
+
+```sh
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+```
+
+打开 <http://127.0.0.1:8080/>，Dashboard 会立即进入内置只读样例工作区。
+该命令不要求凭据、不打开 SQLite，也不会注册事件采集和管理问题路由。
+
+也可以在源码目录直接启动同一个演示：
 
 ```sh
 go run ./cmd/error-tracer demo
 ```
 
-然后打开 <http://127.0.0.1:8080/>，Dashboard 会自动进入内置样例工作区。
-该命令不要求采集密钥或管理员令牌，不打开 SQLite，也不会注册事件采集和
-管理问题路由。
-
-也可以使用容器运行同一个隔离演示：
-
-```sh
-docker build -t error-tracer:demo .
-docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
-```
+进程启动时会输出可直接打开的演示 URL。每个
+[GitHub Release](https://github.com/soulteary/Error-Tracer/releases) 都会附带
+Linux、macOS、Windows 预编译文件，以及校验和、SBOM 和来源证明。启动演示前可用
+`error-tracer version` 确认二进制版本。
 
 ## 使用 Docker Compose 快速启动
 
@@ -193,7 +198,7 @@ Authorization: Bearer 替换为管理员令牌
 | --- | --- | --- | --- |
 | `GET` | `/` | 无 | Dashboard 外壳；读取真实数据仍需管理员令牌 |
 | `GET` | `/assets/error-tracer.js` | 无 | 内嵌浏览器 SDK |
-| `GET` | `/api/v1/meta` | 无 | 公开演示可用状态及纯演示模式标记 |
+| `GET` | `/api/v1/meta` | 无 | 公开服务版本及演示模式标记 |
 | `GET` | `/api/v1/demo/issues` | 无，仅演示模式 | 列出内置只读演示问题 |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | 无，仅演示模式 | 读取一个内置演示问题 |
 | `POST` | `/api/v1/events` | 请求体中的采集密钥 | 提交单个事件 |
@@ -284,8 +289,12 @@ CGO_ENABLED=0 go build -trimpath -o error-tracer ./cmd/error-tracer
 
 ## 文档
 
+- [变更日志](CHANGELOG.md)
+- [参与开发](CONTRIBUTING.zh-CN.md)
 - [演示模式及其安全边界](docs/demo.md)
 - [性能基准与压力测试](docs/performance.md)
+- [维护者发布流程](docs/releasing.zh-CN.md)
+- [安全策略](SECURITY.md)
 - [English README](README.md)
 
 ## 部署注意事项
