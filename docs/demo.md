@@ -1,21 +1,6 @@
 # Demo mode
 
-## Published container: one command
-
-For a published v2 release, start the isolated sample dashboard directly from
-GHCR:
-
-```sh
-docker run --rm --pull=always --read-only --cap-drop=ALL \
-  --security-opt=no-new-privileges:true \
-  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
-```
-
-Open <http://127.0.0.1:8080/>. No checkout, configuration, credentials, or
-database is needed. Release images are published for Linux AMD64 and ARM64 with
-provenance and SBOM attestations.
-
-## Source checkout or downloaded binary
+## Source checkout: one command
 
 From a source checkout, use the dedicated demo command:
 
@@ -25,7 +10,21 @@ go run ./cmd/error-tracer demo
 
 The process prints the direct URL. The dashboard enters the read-only sample
 workspace immediately. Unless `ERROR_TRACER_ADDRESS` is set, the source command
-listens only on loopback. A downloaded release binary uses the same command:
+listens only on loopback.
+
+## Published container or downloaded binary
+
+After v2.0.0 is published, start the isolated sample dashboard directly from
+GHCR without a source checkout:
+
+```sh
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+```
+
+Release images target Linux AMD64 and ARM64 and include provenance and SBOM
+attestations. A downloaded release binary uses the same demo command:
 
 ```sh
 ./error-tracer version

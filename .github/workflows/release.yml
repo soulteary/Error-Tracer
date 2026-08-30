@@ -37,10 +37,10 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: "24"
+          bun-version-file: .bun-version
 
       - name: Validate release identity
         shell: bash
@@ -52,7 +52,7 @@ jobs:
           fi
           version="${tag#v}"
           expected="$(tr -d '[:space:]' < VERSION)"
-          package_version="$(node -p 'require("./package.json").version')"
+          package_version="$(bun -e 'process.stdout.write(require("./package.json").version)')"
           if [[ "${version}" == "${expected}" && "${version}" == "${package_version}" ]]; then
             :
           else
@@ -83,7 +83,9 @@ jobs:
           go mod verify
           go test ./...
           go test -race ./...
-          npm test
+          bun install --frozen-lockfile
+          bun run test
+          bun run check:docs
 
       - name: Build reproducible release archives
         run: scripts/build-release.sh "${VERSION}" dist
@@ -190,14 +192,38 @@ jobs:
             --tag "${IMAGE}:${VERSION}" \
             --attest type=provenance,mode=max \
             --attest type=sbom \
+            --metadata-file /tmp/error-tracer-image-metadata.json \
             --push .
+
+          image_digest="$(bun -e '
+            const metadata = await Bun.file("/tmp/error-tracer-image-metadata.json").json();
+            process.stdout.write(metadata["containerimage.digest"] ?? "");
+          ')"
+          if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "published image digest is missing or invalid" >&2
+            exit 1
+          fi
+          docker buildx imagetools inspect "${IMAGE}@${image_digest}" --raw \
+            > /tmp/error-tracer-image-index.json
+          bun -e '
+            const index = await Bun.file("/tmp/error-tracer-image-index.json").json();
+            const platforms = new Set((index.manifests ?? []).map((entry) =>
+              entry.platform?.os + "/" + entry.platform?.architecture));
+            for (const required of ["linux/amd64", "linux/arm64"]) {
+              if (!platforms.has(required)) {
+                console.error("published image is missing " + required);
+                process.exit(1);
+              }
+            }
+          '
+          echo "IMAGE_DIGEST=${image_digest}" >> "${GITHUB_ENV}"
 
       - name: Smoke-test the published demo
         shell: bash
         run: |
           container_id="$(docker run --detach --read-only --cap-drop=ALL \
             --security-opt=no-new-privileges:true --publish 127.0.0.1::8080 \
-            --pull=always "${IMAGE}:${VERSION}" demo)"
+            --pull=always "${IMAGE}@${IMAGE_DIGEST}" demo)"
           cleanup() {
             docker logs "${container_id}" || true
             docker rm --force "${container_id}" >/dev/null || true
@@ -221,7 +247,7 @@ jobs:
             --tag "${IMAGE}:${MINOR}" \
             --tag "${IMAGE}:${MAJOR}" \
             --tag "${IMAGE}:latest" \
-            "${IMAGE}:${VERSION}"
+            "${IMAGE}@${IMAGE_DIGEST}"
 
       - name: Publish GitHub release
         env:

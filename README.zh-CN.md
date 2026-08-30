@@ -30,21 +30,21 @@ SDK 和内嵌的问题处理 Dashboard。
 
 ## 无配置查看演示
 
-使用已经发布的 v2 容器是查看产品演示的最短路径：
+在源码目录中，只需一条命令即可启动产品演示：
 
 ```sh
-docker run --rm --pull=always --read-only --cap-drop=ALL \
-  --security-opt=no-new-privileges:true \
-  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+go run ./cmd/error-tracer demo
 ```
 
 打开 <http://127.0.0.1:8080/>，Dashboard 会立即进入内置只读样例工作区。
 该命令不要求凭据、不打开 SQLite，也不会注册事件采集和管理问题路由。
 
-也可以在源码目录直接启动同一个演示：
+v2.0.0 发布后，无需下载源码也可以启动同一个演示：
 
 ```sh
-go run ./cmd/error-tracer demo
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
 ```
 
 进程启动时会输出可直接打开的演示 URL。每个

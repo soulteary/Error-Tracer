@@ -7,15 +7,16 @@ reviewable concern and include tests for behavior changes.
 
 ## Development setup
 
-Use the Go version declared in `go.mod`. Node.js 22 or newer is required only
-for the browser SDK tests.
+Use the Go version declared in `go.mod`. Bun 1.4.0 or newer is required for the
+browser SDK tests and documentation checks.
 
 ```sh
 go mod verify
 go vet ./...
 go test ./...
 go test -race ./...
-npm test
+bun run test
+bun run check:docs
 ```
 
 Run benchmarks and the HTTP load test only with the bounded commands in

@@ -36,22 +36,22 @@ tag. It is not part of the current runtime.
 
 ## Try the demo without configuration
 
-The published v2 container is the shortest path to the product tour:
+From a source checkout, start the product tour with one command:
 
 ```sh
-docker run --rm --pull=always --read-only --cap-drop=ALL \
-  --security-opt=no-new-privileges:true \
-  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+go run ./cmd/error-tracer demo
 ```
 
 Open <http://127.0.0.1:8080/>. The dashboard immediately enters the built-in
 read-only sample workspace. The command does not require credentials, does not
 open SQLite, and does not register event ingestion or admin issue routes.
 
-The same tour can run directly from the source tree:
+After v2.0.0 is published, the same tour can run without a source checkout:
 
 ```sh
-go run ./cmd/error-tracer demo
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
 ```
 
 The process prints the direct demo URL at startup. Prebuilt binaries for Linux,

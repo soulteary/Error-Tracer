@@ -7,14 +7,15 @@
 
 ## 开发环境
 
-使用 `go.mod` 声明的 Go 版本。只有浏览器 SDK 测试需要 Node.js 22 或更高版本。
+使用 `go.mod` 声明的 Go 版本。浏览器 SDK 测试和文档检查需要 Bun 1.4.0 或更高版本。
 
 ```sh
 go mod verify
 go vet ./...
 go test ./...
 go test -race ./...
-npm test
+bun run test
+bun run check:docs
 ```
 
 基准和 HTTP 压力测试必须使用[性能指南](docs/performance.md)中的有界命令。未获得
