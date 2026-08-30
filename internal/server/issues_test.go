@@ -470,6 +470,28 @@ func TestUpdateIssueRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestUpdateIssueRejectsOversizedTrailingData(t *testing.T) {
+	fingerprint := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	body := `{"status":"open"}` + strings.Repeat(" ", maxIssueUpdateBodySize)
+	request := authorizedRequest(http.MethodPatch, "/api/v1/issues/"+fingerprint)
+	request.Header.Set("Content-Type", "application/json")
+	request.Body = io.NopCloser(strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	newTestServer().Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+	}
+	var result errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Error != "request_too_large" {
+		t.Fatalf("error = %q, want request_too_large", result.Error)
+	}
+}
+
 func authorizedRequest(method, target string) *http.Request {
 	request := httptest.NewRequest(method, target, nil)
 	request.Header.Set("Authorization", "Bearer "+testAdminToken)

@@ -131,8 +131,7 @@ func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
 	decoder.DisallowUnknownFields()
 	var payload issueUpdateRequest
 	if err := decoder.Decode(&payload); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if bodyLimitExceeded(err) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request_too_large"})
 			return
 		}
@@ -140,6 +139,10 @@ func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
+		if bodyLimitExceeded(err) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "request_too_large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
 		return
 	}

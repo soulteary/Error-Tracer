@@ -62,8 +62,7 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 
 	var payload ingestRequest
 	if err := decoder.Decode(&payload); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if bodyLimitExceeded(err) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "event_too_large"})
 			return
 		}
@@ -71,6 +70,10 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
+		if bodyLimitExceeded(err) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "event_too_large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
 		return
 	}
@@ -124,8 +127,7 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 
 	var payload batchIngestRequest
 	if err := decoder.Decode(&payload); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if bodyLimitExceeded(err) {
 			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "batch_too_large"})
 			return
 		}
@@ -133,6 +135,10 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := ensureJSONEnd(decoder); err != nil {
+		if bodyLimitExceeded(err) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, errorResponse{Error: "batch_too_large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_json"})
 		return
 	}
@@ -221,6 +227,11 @@ func ensureJSONEnd(decoder *json.Decoder) error {
 		return errors.New("multiple JSON values")
 	}
 	return err
+}
+
+func bodyLimitExceeded(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge)
 }
 
 func constantTimeEqual(left, right string) bool {
