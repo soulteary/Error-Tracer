@@ -42,6 +42,12 @@ func allowRateLimit(
 ) bool {
 	allowed, retryAfter := limiter.AllowN(clientAddress(request.RemoteAddr), tokens)
 	if !allowed {
+		if retryAfter == rateLimitRetryNever {
+			writeJSON(w, http.StatusUnprocessableEntity, errorResponse{
+				Error: "rate_limit_burst_exceeded",
+			})
+			return false
+		}
 		w.Header().Set("Retry-After", retryAfterHeader(retryAfter))
 		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})
 		return false

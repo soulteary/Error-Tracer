@@ -14,6 +14,7 @@ const (
 	defaultRateBurst     = 30
 	maxRateLimitClients  = 10_000
 	rateLimitClientTTL   = 10 * time.Minute
+	rateLimitRetryNever  = time.Duration(-1)
 )
 
 type rateBucket struct {
@@ -57,10 +58,16 @@ func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
 	return limiter.AllowN(client, 1)
 }
 
-// AllowN atomically consumes a positive number of tokens for one client.
+// AllowN atomically consumes a positive number of tokens for one client. It
+// returns rateLimitRetryNever when the requested weight can never fit within
+// the configured burst.
 func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Duration) {
 	if tokens <= 0 {
 		return true, 0
+	}
+	required := float64(tokens)
+	if required > limiter.burst {
+		return false, rateLimitRetryNever
 	}
 	now := limiter.now()
 	limiter.mu.Lock()
@@ -96,7 +103,6 @@ func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Durati
 		bucket.updated = now
 	}
 	bucket.lastSeen = now
-	required := float64(tokens)
 	if bucket.tokens >= required {
 		bucket.tokens -= required
 		limiter.storeBucket(client, bucket, useOverflow)

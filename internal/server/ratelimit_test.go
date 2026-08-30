@@ -118,11 +118,14 @@ func TestRateLimiterChargesWeightedRequestsAtomically(t *testing.T) {
 
 	other := newRateLimiter(60, 3)
 	other.now = func() time.Time { return now }
-	if allowed, _ := other.AllowN("client", 4); allowed {
-		t.Fatal("request larger than the burst was accepted")
+	if allowed, retryAfter := other.AllowN("client", 4); allowed || retryAfter != rateLimitRetryNever {
+		t.Fatalf(
+			"request larger than the burst = (%v, %s), want permanent rejection",
+			allowed, retryAfter,
+		)
 	}
-	if bucket := other.buckets["client"]; bucket.tokens != 3 {
-		t.Fatalf("rejected weighted request consumed tokens: %#v", bucket)
+	if len(other.buckets) != 0 {
+		t.Fatalf("permanently rejected request created a bucket: %#v", other.buckets)
 	}
 }
 
@@ -288,6 +291,56 @@ func TestIngestBatchRetryAfterIncludesTheWholeAtomicCharge(t *testing.T) {
 			"batch after advertised delay = %d, want %d; body = %s",
 			response.Code, http.StatusAccepted, response.Body.String(),
 		)
+	}
+}
+
+func TestIngestBatchLargerThanBurstIsPermanentlyRejected(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:         memory,
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"},` +
+		`{"kind":"error","message":"four"}]}`
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+	)
+	request.RemoteAddr = "192.0.2.10:1000"
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"over-burst batch status = %d, want %d; body = %s",
+			response.Code, http.StatusUnprocessableEntity, response.Body.String(),
+		)
+	}
+	if got := response.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("over-burst Retry-After = %q, want no retry advice", got)
+	}
+	var failure errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode over-burst response: %v", err)
+	}
+	if failure.Error != "rate_limit_burst_exceeded" {
+		t.Fatalf("over-burst error = %q, want rate_limit_burst_exceeded", failure.Error)
+	}
+	if len(app.ingestLimiter.buckets) != 0 {
+		t.Fatal("over-burst batch consumed or allocated an event bucket")
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list issues after over-burst batch: %v", err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("over-burst batch stored %d issues, want none", page.Total)
 	}
 }
 

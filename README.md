@@ -182,7 +182,9 @@ modified; all UPSERTs then run in one transaction.
 
 Rate limiting is charged per event, not per HTTP request. Set
 `ERROR_TRACER_RATE_BURST` to at least the largest batch size clients are allowed
-to submit; a batch whose event count exceeds the configured burst is rejected.
+to submit. A batch whose event count exceeds the configured burst receives
+`422 rate_limit_burst_exceeded` without a `Retry-After` header because that request
+can never fit the bucket; split the batch or raise the configured burst.
 Each POST also consumes one token from a separate request bucket before parsing,
 using the same rate and burst settings, so malformed and unauthorized traffic
 remains bounded. After authentication and validation, all event tokens for a
