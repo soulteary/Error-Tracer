@@ -59,12 +59,26 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        run: go test ./...
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      - name: Test with coverage
+        shell: bash
+        run: |
+          go test -covermode=atomic -coverprofile=coverage.out ./...
+          coverage="$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%$/, "", $3); print $3 }')"
+          if [[ -z "${coverage}" ]]; then
+            echo "Unable to read total coverage" >&2
+            exit 1
+          fi
+          awk -v actual="${coverage}" 'BEGIN { if (actual + 0 < 75) exit 1 }'
+          printf '### Go coverage\n\n%s%% (minimum 75%%)\n' "${coverage}" >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Test with race detector
-        if: github.event_name != 'pull_request'
         run: go test -race ./...
+
+      - name: Scan reachable Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Build static binary
         run: CGO_ENABLED=0 go build -trimpath -o /tmp/error-tracer ./cmd/error-tracer
@@ -91,3 +105,43 @@ jobs:
 
       - name: Test browser SDK
         run: node --test sdk/*.test.js
+
+  container:
+    name: Container smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build --tag error-tracer:ci .
+
+      - name: Exercise the locked-down demo image
+        shell: bash
+        run: |
+          container_id="$(docker run --detach --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges:true \
+            --publish 127.0.0.1::8080 error-tracer:ci demo)"
+          cleanup() {
+            docker logs "${container_id}" || true
+            docker rm --force "${container_id}" >/dev/null || true
+          }
+          trap cleanup EXIT
+
+          host_port="$(docker port "${container_id}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error \
+              "http://127.0.0.1:${host_port}/api/v1/meta" > /tmp/error-tracer-meta.json; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          grep --fixed-strings '"demo_only":true' /tmp/error-tracer-meta.json
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${host_port}/readyz" | grep --fixed-strings '"status":"ready"'
+          test "$(docker inspect --format '{{.Config.User}}' "${container_id}")" = "65532:65532"
+          test "$(docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' "${container_id}")" = "true"
