@@ -52,7 +52,7 @@ export function markdownTargets(contents) {
     const definition = referenceDefinitionAt(lines, index);
     if (definition) {
       targets.push(definition.target);
-      index += definition.continued ? 1 : 0;
+      index += definition.consumed;
     }
   }
   return targets;
@@ -68,7 +68,7 @@ function referenceDefinitionAt(lines, index) {
   }
 
   let remainder = match[2];
-  let continued = false;
+  let consumed = 0;
   if (!remainder.trim()) {
     if (index + 1 >= lines.length) {
       return null;
@@ -87,11 +87,35 @@ function referenceDefinitionAt(lines, index) {
       return null;
     }
     remainder = continuationMatch[1];
-    continued = true;
+    consumed = 1;
   }
 
-  const target = referenceDestination(remainder);
-  return target === null ? null : { target, continued };
+  const destination = referenceDestination(remainder);
+  if (destination === null) {
+    return null;
+  }
+  if (destination.trailing) {
+    const title = completeReferenceTitle(
+      destination.trailing, lines, index + consumed + 1, parsedLine.containers,
+    );
+    if (!title.valid) {
+      return null;
+    }
+    consumed += title.consumed;
+  } else {
+    const nextLine = referenceContinuation(
+      lines, index + consumed + 1, parsedLine.containers,
+    );
+    if (nextLine !== null && /^["'(]/.test(nextLine)) {
+      const title = completeReferenceTitle(
+        nextLine, lines, index + consumed + 2, parsedLine.containers,
+      );
+      if (title.valid) {
+        consumed += title.consumed + 1;
+      }
+    }
+  }
+  return { target: destination.target, consumed };
 }
 
 function referenceDestination(remainder) {
@@ -114,14 +138,53 @@ function referenceDestination(remainder) {
     trailing = match[2].trim();
   }
 
-  if (trailing && !referenceTitle(trailing)) {
-    return null;
-  }
-  return target;
+  return { target, trailing };
 }
 
 function referenceTitle(value) {
   return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/.test(value);
+}
+
+function completeReferenceTitle(initial, lines, nextIndex, containers) {
+  let value = initial.trim();
+  let consumed = 0;
+  while (true) {
+    if (referenceTitle(value)) {
+      return { valid: true, consumed };
+    }
+    if (!unterminatedReferenceTitle(value)) {
+      return { valid: false, consumed: 0 };
+    }
+    const continuation = referenceContinuation(lines, nextIndex + consumed, containers);
+    if (continuation === null || !continuation.trim()) {
+      return { valid: false, consumed: 0 };
+    }
+    value += `\n${continuation.trimEnd()}`;
+    consumed++;
+  }
+}
+
+function unterminatedReferenceTitle(value) {
+  const closing = value[0] === "(" ? ")" : value[0];
+  if (closing !== ")" && closing !== "\"" && closing !== "'") {
+    return false;
+  }
+  for (let index = 1; index < value.length; index++) {
+    if (value[index] === "\\") {
+      index++;
+    } else if (value[index] === closing) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function referenceContinuation(lines, index, containers) {
+  if (index >= lines.length) {
+    return null;
+  }
+  const continuation = continueBlockContainers(lines[index], containers);
+  return continuation?.match(/^[ \t]{0,3}(\S.*)$/)?.[1] || null;
 }
 
 function parseBlockContainers(line) {

@@ -133,6 +133,25 @@ test("extracts reference destinations continued on the next line", () => {
   ]);
 });
 
+test("extracts references with multiline titles", () => {
+  assert.deepEqual(markdownTargets([
+    "[quoted]: docs/quoted.md \"A long",
+    "title\"",
+    "[parenthesized]: docs/parenthesized.md (Another",
+    "title)",
+    "[next-line]: docs/next-line.md",
+    "  'A title",
+    "  on following lines'",
+    "10. [ordered]: docs/ordered-title.md \"A list",
+    "    title\"",
+  ].join("\n")), [
+    "docs/quoted.md",
+    "docs/parenthesized.md",
+    "docs/next-line.md",
+    "docs/ordered-title.md",
+  ]);
+});
+
 test("reports a missing local reference target", () => {
   const root = mkdtempSync(join(tmpdir(), "error-tracer-doc-links-"));
   mkdirSync(join(root, "docs"));
