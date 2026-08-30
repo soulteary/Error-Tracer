@@ -526,13 +526,12 @@ function indentationWidth(value) {
 function stripIndent(line, width) {
   let column = 0;
   let index = 0;
-  while (index < line.length && column < width) {
+  while (index < line.length &&
+         (line[index] === " " || line[index] === "\t")) {
     if (line[index] === " ") {
       column++;
-    } else if (line[index] === "\t") {
-      column += 4 - (column % 4);
     } else {
-      return null;
+      column += 4 - (column % 4);
     }
     index++;
   }

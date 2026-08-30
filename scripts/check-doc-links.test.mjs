@@ -305,6 +305,19 @@ test("keeps indented list continuations visible", () => {
   ].join("\n")), ["docs/inline.md", "docs/second.md"]);
 });
 
+test("preserves tab columns after list indentation", () => {
+  assert.deepEqual(markdownTargets([
+    "- List item",
+    "",
+    "  \t[continuation](docs/continuation.md)",
+  ].join("\n")), ["docs/continuation.md"]);
+  assert.deepEqual(markdownTargets([
+    "- List item",
+    "",
+    "    \t[code](docs/not-visible.md)",
+  ].join("\n")), []);
+});
+
 test("recognizes empty list items without breaking Setext headings", () => {
   assert.deepEqual(markdownTargets([
     "-",
