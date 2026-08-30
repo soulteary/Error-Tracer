@@ -81,6 +81,25 @@ test("keeps a list fence open across an unindented blank line", () => {
   ].join("\n")), []);
 });
 
+test("keeps a mixed-container fence open across a quote-only blank", () => {
+  assert.deepEqual(markdownTargets([
+    "> - ```markdown",
+    ">   listed code in a quote",
+    ">",
+    ">   [missing]: docs/still-in-mixed-fence.md",
+    ">   ```",
+  ].join("\n")), []);
+});
+
+test("ends an unclosed quote fence before a new quote block", () => {
+  assert.deepEqual(markdownTargets([
+    "> ```markdown",
+    "> fenced code",
+    "",
+    "> [new-quote]: docs/new-quote.md",
+  ].join("\n")), ["docs/new-quote.md"]);
+});
+
 test("ignores GitHub footnote definitions", () => {
   assert.deepEqual(markdownTargets([
     "A statement with a footnote.[^1]",

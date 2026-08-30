@@ -228,6 +228,28 @@ function continueBlockContainers(line, containers) {
   return remaining;
 }
 
+function blankWithinBlockContainers(line, containers) {
+  let remaining = line.replace(/\r$/, "");
+  for (const container of containers) {
+    if (container.type === "quote") {
+      const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+      if (!quote) {
+        return false;
+      }
+      remaining = remaining.slice(quote[0].length);
+      continue;
+    }
+    if (!remaining.trim()) {
+      return true;
+    }
+    remaining = stripIndent(remaining, container.indent);
+    if (remaining === null) {
+      return false;
+    }
+  }
+  return !remaining.trim();
+}
+
 function indentationWidth(value) {
   let column = 0;
   for (const character of value) {
@@ -268,7 +290,7 @@ function withoutFencedCode(contents) {
         }
         return "";
       }
-      if (!line.trim() && !fence.containers.some(({ type }) => type === "quote")) {
+      if (blankWithinBlockContainers(line, fence.containers)) {
         return "";
       }
       fence = null;
