@@ -260,7 +260,7 @@ func firstStackLine(stack string) string {
 	return ""
 }
 
-var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@\S+:\d+(?::\d+)?$`)
+var firefoxStackFramePattern = regexp.MustCompile(`^[^@:\r\n]*@\S+:\d+(?::\d+)?$`)
 
 func isV8StackFrame(frame string) bool {
 	if !strings.HasPrefix(frame, "at ") {

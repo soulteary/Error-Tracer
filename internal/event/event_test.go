@@ -227,6 +227,20 @@ func TestFingerprintSkipsAtSignInErrorHeader(t *testing.T) {
 	}
 }
 
+func TestFingerprintSkipsNumericEmailSuffixInErrorHeader(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "connection failed",
+		Stack:   "Error: connect alice@example.com:443\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: connect alice@example.com:443\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("a numeric email suffix in the error header hid different V8 stack frames")
+	}
+}
+
 func TestFingerprintAcceptsAtSignsInsideFirefoxFrameURLs(t *testing.T) {
 	first := Event{
 		Kind:    KindUnhandledRejection,
