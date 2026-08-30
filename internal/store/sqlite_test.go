@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -49,6 +50,88 @@ func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
 	}
 	if persisted.Occurrences != 2 || persisted.LastEvent.Release != "2.0.0" {
 		t.Fatalf("persisted issue = %#v", persisted)
+	}
+}
+
+func TestSQLiteRecordMigratesARecurringV1Issue(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 30, 18, 0, 0, 0, time.UTC)
+	legacyEvent := testEvent(base)
+	legacyEvent.ID = "legacy-latest"
+	legacyPayload, err := json.Marshal(legacyEvent)
+	if err != nil {
+		t.Fatalf("encode legacy event: %v", err)
+	}
+	legacyFingerprint := legacyEvent.LegacyFingerprint()
+	if _, err := database.db.Exec(`
+INSERT INTO issues (
+    project_id, fingerprint, kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`,
+		"project-a", legacyFingerprint, legacyEvent.Kind, legacyEvent.Message,
+		legacyEvent.SourceURL, legacyEvent.Line, legacyEvent.Column,
+		IssueStatusIgnored, 7, base.Add(-time.Hour).UnixNano(), base.UnixNano(),
+		legacyPayload,
+	); err != nil {
+		t.Fatalf("seed legacy issue: %v", err)
+	}
+	for index := range 2 {
+		retained := legacyEvent
+		retained.ID = fmt.Sprintf("legacy-%d", index)
+		retained.ReceivedAt = base.Add(-time.Duration(index) * time.Minute)
+		payload, err := json.Marshal(retained)
+		if err != nil {
+			t.Fatalf("encode retained legacy event %d: %v", index, err)
+		}
+		if _, err := database.db.Exec(`
+INSERT INTO events (project_id, fingerprint, event_id, received_at, payload)
+VALUES (?, ?, ?, ?, ?)
+`, "project-a", legacyFingerprint, retained.ID, retained.ReceivedAt.UnixNano(), payload); err != nil {
+			t.Fatalf("seed retained legacy event %d: %v", index, err)
+		}
+	}
+
+	recurrence := legacyEvent
+	recurrence.ID = "v2-recurrence"
+	recurrence.ReceivedAt = base.Add(time.Minute)
+	issue, err := database.Record(context.Background(), "project-a", recurrence)
+	if err != nil {
+		t.Fatalf("record v2 recurrence: %v", err)
+	}
+	if issue.Fingerprint != recurrence.Fingerprint() {
+		t.Fatalf("fingerprint = %q, want v2 %q", issue.Fingerprint, recurrence.Fingerprint())
+	}
+	if issue.Status != IssueStatusIgnored || issue.Occurrences != 8 {
+		t.Fatalf("migrated issue = %#v, want ignored with 8 occurrences", issue)
+	}
+	if !issue.FirstSeen.Equal(base.Add(-time.Hour)) || issue.LastEvent.ID != recurrence.ID {
+		t.Fatalf("migrated issue timestamps/event = %#v", issue)
+	}
+	history, err := database.ListIssueEvents(
+		context.Background(), "project-a", issue.Fingerprint, EventListOptions{Limit: 10},
+	)
+	if err != nil {
+		t.Fatalf("list migrated history: %v", err)
+	}
+	if history.Total != 3 || len(history.Events) != 3 {
+		t.Fatalf("migrated history = %#v, want three retained events", history)
+	}
+	if _, err := database.GetIssue(
+		context.Background(), "project-a", legacyFingerprint,
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("legacy issue lookup error = %v, want ErrIssueNotFound", err)
+	}
+	var legacyEvents int
+	if err := database.db.QueryRow(
+		"SELECT COUNT(*) FROM events WHERE project_id = ? AND fingerprint = ?",
+		"project-a", legacyFingerprint,
+	).Scan(&legacyEvents); err != nil {
+		t.Fatalf("count legacy events: %v", err)
+	}
+	if legacyEvents != 0 {
+		t.Fatalf("legacy event rows = %d, want 0 after migration", legacyEvents)
 	}
 }
 

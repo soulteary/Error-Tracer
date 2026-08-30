@@ -256,6 +256,22 @@ func TestFingerprintEncodesFieldBoundaries(t *testing.T) {
 	}
 }
 
+func TestLegacyFingerprintMatchesTheV1Encoding(t *testing.T) {
+	captured := Event{
+		Kind:      KindError,
+		Message:   "boom",
+		SourceURL: "https://example.com/app.js",
+		Line:      10,
+		Column:    2,
+		Stack:     "Error: boom\n    at run (app.js:10:2)",
+	}
+
+	const want = "70f12ea2361e3f43b73102b04e669161acc3b4283eca455e262ea35d6e9a4e3b"
+	if got := captured.LegacyFingerprint(); got != want {
+		t.Fatalf("LegacyFingerprint() = %q, want v1 digest %q", got, want)
+	}
+}
+
 func TestFingerprintIgnoresURLQueryAfterNormalization(t *testing.T) {
 	first := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=1"}
 	second := Event{Kind: KindError, Message: "boom", SourceURL: "https://example.com/app.js?v=2"}

@@ -99,6 +99,18 @@ INSERT INTO events (project_id, fingerprint, event_id, received_at, payload)
 VALUES (?, ?, ?, ?, ?)
 `
 
+const sqliteCopyLegacyIssue = `
+INSERT OR IGNORE INTO issues (
+    project_id, fingerprint, kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+)
+SELECT
+    project_id, ?, kind, message, source_url, line, column_number,
+    status, occurrences, first_seen, last_seen, last_event
+FROM issues
+WHERE project_id = ? AND fingerprint = ?
+`
+
 const sqliteTrimEvents = `
 DELETE FROM events
 WHERE sequence IN (
@@ -519,10 +531,11 @@ func (s *SQLite) Record(ctx context.Context, projectID string, captured event.Ev
 }
 
 type sqliteRecord struct {
-	event       event.Event
-	fingerprint string
-	encoded     []byte
-	receivedAt  int64
+	event             event.Event
+	fingerprint       string
+	legacyFingerprint string
+	encoded           []byte
+	receivedAt        int64
 }
 
 // RecordBatch adds every event in one transaction. Any failed write or read
@@ -539,10 +552,11 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 			return nil, fmt.Errorf("encode event %d: %w", index, encodeErr)
 		}
 		records[index] = sqliteRecord{
-			event:       item,
-			fingerprint: item.Fingerprint(),
-			encoded:     encoded,
-			receivedAt:  item.ReceivedAt.UnixNano(),
+			event:             item,
+			fingerprint:       item.Fingerprint(),
+			legacyFingerprint: item.LegacyFingerprint(),
+			encoded:           encoded,
+			receivedAt:        item.ReceivedAt.UnixNano(),
 		}
 	}
 
@@ -551,6 +565,13 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		return nil, fmt.Errorf("begin record batch transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	for index, record := range records {
+		if err := migrateLegacyIssueFingerprint(
+			ctx, transaction, projectID, record.legacyFingerprint, record.fingerprint,
+		); err != nil {
+			return nil, fmt.Errorf("migrate legacy fingerprint for event %d: %w", index, err)
+		}
+	}
 
 	issueStatement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
 	if err != nil {
@@ -616,6 +637,44 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		return nil, fmt.Errorf("commit record batch transaction: %w", err)
 	}
 	return issues, nil
+}
+
+func migrateLegacyIssueFingerprint(
+	ctx context.Context,
+	transaction *sql.Tx,
+	projectID, legacyFingerprint, fingerprint string,
+) error {
+	if legacyFingerprint == fingerprint {
+		return nil
+	}
+	result, err := transaction.ExecContext(
+		ctx, sqliteCopyLegacyIssue, fingerprint, projectID, legacyFingerprint,
+	)
+	if err != nil {
+		return fmt.Errorf("copy legacy issue: %w", err)
+	}
+	copied, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read copied legacy issue count: %w", err)
+	}
+	if copied == 0 {
+		return nil
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		"UPDATE events SET fingerprint = ? WHERE project_id = ? AND fingerprint = ?",
+		fingerprint, projectID, legacyFingerprint,
+	); err != nil {
+		return fmt.Errorf("move legacy event history: %w", err)
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		"DELETE FROM issues WHERE project_id = ? AND fingerprint = ?",
+		projectID, legacyFingerprint,
+	); err != nil {
+		return fmt.Errorf("remove legacy issue: %w", err)
+	}
+	return nil
 }
 
 // GetIssue returns one issue from one project.

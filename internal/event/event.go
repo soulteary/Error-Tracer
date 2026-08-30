@@ -186,6 +186,23 @@ func (e Event) Fingerprint() string {
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
+// LegacyFingerprint returns the v1 grouping key used by existing databases.
+// Persistent stores use it only to carry an issue's state and retained history
+// forward when that issue first recurs under the v2 fingerprint algorithm.
+func (e Event) LegacyFingerprint() string {
+	parts := []string{
+		"error-tracer-v1",
+		string(e.Kind),
+		e.Message,
+		e.SourceURL,
+		fmt.Sprintf("%d", e.Line),
+		fmt.Sprintf("%d", e.Column),
+		firstStackLine(e.Stack),
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(digest[:])
+}
+
 func (kind Kind) valid() bool {
 	switch kind {
 	case KindError, KindUnhandledRejection, KindResourceError:
@@ -232,6 +249,15 @@ func firstStackFrame(stack string) string {
 		}
 	}
 	return firstLine
+}
+
+func firstStackLine(stack string) string {
+	for line := range strings.SplitSeq(stack, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@[^\s@]+:\d+(?::\d+)?$`)
