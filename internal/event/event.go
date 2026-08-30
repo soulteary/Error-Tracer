@@ -260,7 +260,7 @@ func firstStackLine(stack string) string {
 	return ""
 }
 
-var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@[^\s@]+:\d+(?::\d+)?$`)
+var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@\S+:\d+(?::\d+)?$`)
 
 func canonicalizeStackFrame(frame string) string {
 	if strings.HasPrefix(frame, "at ") {
@@ -270,7 +270,7 @@ func canonicalizeStackFrame(frame string) string {
 		return "at " + canonicalizeStackLocation(strings.TrimSpace(strings.TrimPrefix(frame, "at ")))
 	}
 
-	at := strings.LastIndexByte(frame, '@')
+	at := strings.IndexByte(frame, '@')
 	if at < 0 {
 		return frame
 	}

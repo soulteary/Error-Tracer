@@ -227,6 +227,30 @@ func TestFingerprintSkipsAtSignInErrorHeader(t *testing.T) {
 	}
 }
 
+func TestFingerprintAcceptsAtSignsInsideFirefoxFrameURLs(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack: "Error: request failed\n" +
+			"run@webpack:///node_modules/@scope/pkg/app.js:10:2",
+	}
+	second := first
+	second.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/worker.js:40:7"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("an at-sign inside a Firefox frame URL hid different call sites")
+	}
+	cacheVariant := first
+	cacheVariant.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/app.js?v=2:10:2"
+	first.Stack = "Error: request failed\n" +
+		"run@webpack:///node_modules/@scope/pkg/app.js?v=1:10:2"
+	if first.Fingerprint() != cacheVariant.Fingerprint() {
+		t.Fatal("a cache-busting scoped-package frame URL changed the fingerprint")
+	}
+}
+
 func TestFingerprintCanonicalizesStackFrameURL(t *testing.T) {
 	first := Event{
 		Kind:    KindError,
