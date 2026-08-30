@@ -414,6 +414,15 @@ test("extracts references with multiline titles", () => {
   ]);
 });
 
+test("scans multiline definitions with active list containers", () => {
+  assert.deepEqual(markdownTargets([
+    "-",
+    "    [first]: docs/first.md \"A long",
+    "    title\"",
+    "    [second]: docs/second.md",
+  ].join("\n")), ["docs/first.md", "docs/second.md"]);
+});
+
 test("reports a missing local reference target", () => {
   const root = mkdtempSync(join(tmpdir(), "error-tracer-doc-links-"));
   mkdirSync(join(root, "docs"));

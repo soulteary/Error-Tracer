@@ -388,7 +388,17 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     }
     const nextParagraphOpen = paragraphOpenAfter(content, state.paragraphOpen);
     if (!state.paragraphOpen || !nextParagraphOpen) {
-      const definition = referenceDefinitionAt(lines, previous, false);
+      const nestedLine = parseBlockContainers(content);
+      const definition = referenceDefinitionAt(
+        lines,
+        previous,
+        false,
+        null,
+        {
+          content: nestedLine.content,
+          containers: [...containers, ...nestedLine.containers],
+        },
+      );
       if (definition) {
         state.paragraphOpen = false;
         state.index += definition.consumed;
