@@ -879,6 +879,48 @@ func TestSQLiteRecordSerializesConcurrentWriters(t *testing.T) {
 	}
 }
 
+func TestSQLiteRecordSerializesConcurrentWALWriters(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "concurrent-writers.db")
+	database, err := OpenSQLiteWithOptions(
+		context.Background(), path, SQLiteOptions{MaxOpenConnections: 8},
+	)
+	if err != nil {
+		t.Fatalf("open concurrent SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	captured := testEvent(time.Now().UTC())
+	const workers = 32
+
+	start := make(chan struct{})
+	errorsChannel := make(chan error, workers)
+	var waitGroup sync.WaitGroup
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			_, recordErr := database.Record(context.Background(), "project-a", captured)
+			errorsChannel <- recordErr
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsChannel)
+	for recordErr := range errorsChannel {
+		if recordErr != nil {
+			t.Fatalf("record event through WAL pool: %v", recordErr)
+		}
+	}
+
+	issue, err := database.GetIssue(context.Background(), "project-a", captured.Fingerprint())
+	if err != nil {
+		t.Fatalf("get issue: %v", err)
+	}
+	if issue.Occurrences != workers {
+		t.Fatalf("occurrences = %d, want %d", issue.Occurrences, workers)
+	}
+}
+
 func TestSQLiteConcurrentPoolUsesWALAndConnectionPragmas(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "concurrent.db")
 	database, err := OpenSQLiteWithOptions(

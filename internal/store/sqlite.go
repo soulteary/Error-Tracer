@@ -602,29 +602,38 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		}
 	}
 
-	transaction, err := s.db.BeginTx(ctx, nil)
+	connection, err := s.db.Conn(ctx)
 	if err != nil {
+		return nil, fmt.Errorf("acquire record batch connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return nil, fmt.Errorf("begin record batch transaction: %w", err)
 	}
-	defer func() { _ = transaction.Rollback() }()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
 	migratedFingerprints := make(map[string]struct{}, len(records))
 	for index, record := range records {
 		if _, migrated := migratedFingerprints[record.fingerprint]; migrated {
 			continue
 		}
 		if err := migrateLegacyIssueFingerprints(
-			ctx, transaction, projectID, record.event, record.fingerprint,
+			ctx, connection, projectID, record.event, record.fingerprint,
 		); err != nil {
 			return nil, fmt.Errorf("migrate legacy fingerprint for event %d: %w", index, err)
 		}
 		migratedFingerprints[record.fingerprint] = struct{}{}
 	}
 
-	issueStatement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
+	issueStatement, err := connection.PrepareContext(ctx, sqliteUpsertIssue)
 	if err != nil {
 		return nil, fmt.Errorf("prepare issue batch: %w", err)
 	}
-	eventStatement, err := transaction.PrepareContext(ctx, sqliteInsertEvent)
+	eventStatement, err := connection.PrepareContext(ctx, sqliteInsertEvent)
 	if err != nil {
 		_ = issueStatement.Close()
 		return nil, fmt.Errorf("prepare event batch: %w", err)
@@ -660,7 +669,7 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		return nil, fmt.Errorf("close issue batch statement: %w", err)
 	}
 	for fingerprint := range touched {
-		if _, err := transaction.ExecContext(
+		if _, err := connection.ExecContext(
 			ctx, sqliteTrimEvents, projectID, fingerprint, s.maxEventsPerIssue,
 		); err != nil {
 			return nil, fmt.Errorf("trim event history for %s: %w", fingerprint, err)
@@ -672,7 +681,7 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 	for index, record := range records {
 		issue, exists := issuesByFingerprint[record.fingerprint]
 		if !exists {
-			issue, err = queryIssue(ctx, transaction, projectID, record.fingerprint)
+			issue, err = queryIssue(ctx, connection, projectID, record.fingerprint)
 			if err != nil {
 				return nil, fmt.Errorf("read issue for event %d: %w", index, err)
 			}
@@ -680,15 +689,21 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 		}
 		issues[index] = issue
 	}
-	if err := transaction.Commit(); err != nil {
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, fmt.Errorf("commit record batch transaction: %w", err)
 	}
+	committed = true
 	return issues, nil
+}
+
+type sqliteReadWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
 func migrateLegacyIssueFingerprints(
 	ctx context.Context,
-	transaction *sql.Tx,
+	transaction sqliteReadWriter,
 	projectID string,
 	captured event.Event,
 	fingerprint string,

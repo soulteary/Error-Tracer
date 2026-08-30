@@ -266,19 +266,14 @@ func isV8StackFrame(frame string) bool {
 	if !strings.HasPrefix(frame, "at ") {
 		return false
 	}
-	location := strings.TrimSpace(strings.TrimPrefix(frame, "at "))
-	if open := strings.LastIndexByte(location, '('); open >= 0 && strings.HasSuffix(location, ")") {
-		location = location[open+1 : len(location)-1]
-	}
+	_, location, _ := splitV8StackFrame(frame)
 	return stackPositionPattern.MatchString(location)
 }
 
 func canonicalizeStackFrame(frame string) string {
 	if strings.HasPrefix(frame, "at ") {
-		if open := strings.LastIndexByte(frame, '('); open >= 3 && strings.HasSuffix(frame, ")") {
-			return frame[:open+1] + canonicalizeStackLocation(frame[open+1:len(frame)-1]) + ")"
-		}
-		return "at " + canonicalizeStackLocation(strings.TrimSpace(strings.TrimPrefix(frame, "at ")))
+		prefix, location, suffix := splitV8StackFrame(frame)
+		return prefix + canonicalizeStackLocation(location) + suffix
 	}
 
 	at := strings.IndexByte(frame, '@')
@@ -286,6 +281,20 @@ func canonicalizeStackFrame(frame string) string {
 		return frame
 	}
 	return frame[:at+1] + canonicalizeStackLocation(frame[at+1:])
+}
+
+func splitV8StackFrame(frame string) (prefix, location, suffix string) {
+	location = strings.TrimSpace(strings.TrimPrefix(frame, "at "))
+	open := -1
+	if strings.HasPrefix(location, "(") {
+		open = 0
+	} else if separator := strings.Index(location, " ("); separator >= 0 {
+		open = separator + 1
+	}
+	if open >= 0 && strings.HasSuffix(location, ")") {
+		return "at " + location[:open+1], location[open+1 : len(location)-1], ")"
+	}
+	return "at ", location, ""
 }
 
 var stackPositionPattern = regexp.MustCompile(`:\d+(?::\d+)?$`)

@@ -301,6 +301,12 @@ func TestFingerprintCanonicalizesStackFrameURL(t *testing.T) {
 	if first.Fingerprint() != second.Fingerprint() {
 		t.Fatal("a cache-busting Firefox stack-frame URL changed the fingerprint")
 	}
+
+	first.Stack = "Error: boom\n    at run (https://example.com/app.js?cb=foo(1):10:2)"
+	second.Stack = "Error: boom\n    at run (https://example.com/app.js?cb=foo(2):10:2)"
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("parentheses inside a stack-frame query changed the fingerprint")
+	}
 }
 
 func TestFingerprintEncodesFieldBoundaries(t *testing.T) {
