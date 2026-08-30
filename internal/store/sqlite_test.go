@@ -157,6 +157,75 @@ func TestSQLiteMigrationRollsBackFailedVersion(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrationsLockBeforeReadingTheSchemaVersion(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "migration-lock.db")
+	dataSourceName := sqliteDataSourceName(path, 1)
+	blocker, err := sql.Open("sqlite", dataSourceName)
+	if err != nil {
+		t.Fatalf("open migration blocker: %v", err)
+	}
+	t.Cleanup(func() { _ = blocker.Close() })
+	blocker.SetMaxOpenConns(1)
+	blocker.SetMaxIdleConns(1)
+	blockerConnection, err := blocker.Conn(ctx)
+	if err != nil {
+		t.Fatalf("acquire migration blocker: %v", err)
+	}
+	t.Cleanup(func() { _ = blockerConnection.Close() })
+	if _, err := blockerConnection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatalf("begin blocking transaction: %v", err)
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			_, _ = blockerConnection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	})
+
+	databases := make([]*sql.DB, 2)
+	for index := range databases {
+		databases[index], err = sql.Open("sqlite", dataSourceName)
+		if err != nil {
+			t.Fatalf("open migration database %d: %v", index, err)
+		}
+		databases[index].SetMaxOpenConns(1)
+		databases[index].SetMaxIdleConns(1)
+		t.Cleanup(func() { _ = databases[index].Close() })
+	}
+	migrations := []sqliteMigration{{
+		version: 1,
+		name:    "serialized migration",
+		schema:  "CREATE TABLE migration_lock_test (id INTEGER)",
+	}}
+	errorsChannel := make(chan error, len(databases))
+	for _, database := range databases {
+		go func() {
+			errorsChannel <- migrateSQLite(ctx, database, migrations)
+		}()
+	}
+	for index, database := range databases {
+		waitForSQLiteConnectionUse(t, database, fmt.Sprintf("migration database %d", index))
+	}
+	if _, err := blockerConnection.ExecContext(ctx, "COMMIT"); err != nil {
+		t.Fatalf("release migration blocker: %v", err)
+	}
+	released = true
+	for range databases {
+		if err := <-errorsChannel; err != nil {
+			t.Fatalf("concurrent migration: %v", err)
+		}
+	}
+
+	var version int
+	if err := databases[0].QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read serialized migration version: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("serialized migration version = %d, want 1", version)
+	}
+}
+
 func TestSQLiteRecordBatchUsesOneAtomicTransaction(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -322,6 +391,65 @@ func TestSQLiteListIssuesCursorHandlesEqualTimestamps(t *testing.T) {
 	}
 }
 
+func TestSQLiteIssueCursorAddsAnIndexedLastSeenRange(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	lastSeen := time.Now().UTC().UnixNano()
+	tests := []struct {
+		name      string
+		where     string
+		arguments []any
+		index     string
+	}{
+		{
+			name:      "all statuses",
+			where:     "project_id = ?" + sqliteIssueCursorPredicate,
+			arguments: []any{"project-a", lastSeen, lastSeen, lastSeen, "fingerprint"},
+			index:     "issues_project_last_seen_fingerprint",
+		},
+		{
+			name:      "one status",
+			where:     "project_id = ? AND status = ?" + sqliteIssueCursorPredicate,
+			arguments: []any{"project-a", IssueStatusOpen, lastSeen, lastSeen, lastSeen, "fingerprint"},
+			index:     "issues_project_status_last_seen_fingerprint",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			arguments := append(append([]any{}, test.arguments...), 26, 0)
+			rows, err := database.db.QueryContext(context.Background(), `
+EXPLAIN QUERY PLAN
+SELECT project_id, fingerprint
+FROM issues
+WHERE `+test.where+`
+ORDER BY last_seen DESC, fingerprint ASC
+LIMIT ? OFFSET ?
+`, arguments...)
+			if err != nil {
+				t.Fatalf("explain cursor query: %v", err)
+			}
+			defer rows.Close()
+			var details []string
+			for rows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+					t.Fatalf("scan cursor query plan: %v", err)
+				}
+				details = append(details, detail)
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatalf("iterate cursor query plan: %v", err)
+			}
+			plan := strings.ToLower(strings.Join(details, "\n"))
+			if !strings.Contains(plan, strings.ToLower(test.index)) ||
+				!strings.Contains(plan, "last_seen<?") {
+				t.Fatalf("cursor query plan does not use the composite range index:\n%s", plan)
+			}
+		})
+	}
+}
+
 func TestSQLiteListIssuesFiltersByStatus(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -416,6 +544,76 @@ func TestSQLiteListIssueEventsIsBoundedProjectScopedAndCursorPaginated(t *testin
 		context.Background(), "project-a", "missing", EventListOptions{},
 	); !errors.Is(err, ErrIssueNotFound) {
 		t.Fatalf("missing issue history error = %v, want ErrIssueNotFound", err)
+	}
+}
+
+func TestSQLiteOpenReconcilesALowerEventHistoryLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history-limit.db")
+	database, err := OpenSQLiteWithOptions(
+		context.Background(), path,
+		SQLiteOptions{MaxOpenConnections: 1, MaxEventsPerIssue: 3},
+	)
+	if err != nil {
+		t.Fatalf("open SQLite with initial history limit: %v", err)
+	}
+	groupCount := sqliteHistoryReconcileGroupBatch + 1
+	captured := make([]event.Event, 0, groupCount*3)
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+	for group := range groupCount {
+		for occurrence := range 3 {
+			item := testEvent(base.Add(time.Duration(occurrence) * time.Minute))
+			item.ID = fmt.Sprintf("history-%03d-%d", group, occurrence)
+			item.Message = fmt.Sprintf("history group %03d", group)
+			captured = append(captured, item)
+		}
+	}
+	if _, err := database.RecordBatch(context.Background(), "project-a", captured); err != nil {
+		t.Fatalf("seed event histories: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close SQLite with initial history limit: %v", err)
+	}
+
+	database, err = OpenSQLiteWithOptions(
+		context.Background(), path,
+		SQLiteOptions{MaxOpenConnections: 1, MaxEventsPerIssue: 2},
+	)
+	if err != nil {
+		t.Fatalf("reopen SQLite with lower history limit: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	var oversized, retained int
+	if err := database.db.QueryRow(`
+SELECT COUNT(*)
+FROM (
+    SELECT 1
+    FROM events
+    GROUP BY project_id, fingerprint
+    HAVING COUNT(*) > 2
+)
+`).Scan(&oversized); err != nil {
+		t.Fatalf("count oversized histories: %v", err)
+	}
+	if err := database.db.QueryRow("SELECT COUNT(*) FROM events").Scan(&retained); err != nil {
+		t.Fatalf("count retained event history: %v", err)
+	}
+	if oversized != 0 || retained != groupCount*2 {
+		t.Fatalf(
+			"oversized histories = %d, retained events = %d, want 0 and %d",
+			oversized, retained, groupCount*2,
+		)
+	}
+	var minimumOccurrences, maximumOccurrences int
+	if err := database.db.QueryRow(
+		"SELECT MIN(occurrences), MAX(occurrences) FROM issues",
+	).Scan(&minimumOccurrences, &maximumOccurrences); err != nil {
+		t.Fatalf("read lifetime occurrence counts: %v", err)
+	}
+	if minimumOccurrences != 3 || maximumOccurrences != 3 {
+		t.Fatalf(
+			"lifetime occurrences range = %d..%d, want 3..3",
+			minimumOccurrences, maximumOccurrences,
+		)
 	}
 }
 
@@ -736,6 +934,35 @@ func TestSQLitePruneIssuesBoundsEachDelete(t *testing.T) {
 	}
 }
 
+func TestSQLiteReadyRequiresTheOperationalSchema(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open schema probe database: %v", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.Exec(sqliteInitialSchema); err != nil {
+		t.Fatalf("create partial schema: %v", err)
+	}
+	store := &SQLite{db: database}
+	if err := store.Ready(context.Background()); err == nil {
+		t.Fatal("Ready() error = nil with the events table missing")
+	}
+	if _, err := database.Exec(sqliteEventHistorySchema); err != nil {
+		t.Fatalf("complete operational schema: %v", err)
+	}
+	if err := store.Ready(context.Background()); err != nil {
+		t.Fatalf("Ready() with the complete schema: %v", err)
+	}
+	if _, err := database.Exec("DROP TABLE events"); err != nil {
+		t.Fatalf("drop required events table: %v", err)
+	}
+	if err := store.Ready(context.Background()); err == nil {
+		t.Fatal("Ready() error = nil after a required table was removed")
+	}
+}
+
 func TestSQLiteReadOnlyMaintenanceAndAtomicBackup(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "source #1.db")
@@ -793,4 +1020,28 @@ func openTestSQLite(t *testing.T, path string) *SQLite {
 		t.Fatalf("open SQLite database: %v", err)
 	}
 	return database
+}
+
+func waitForSQLiteConnectionUse(t *testing.T, database *sql.DB, description string) {
+	t.Helper()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	consecutive := 0
+	for {
+		if database.Stats().InUse > 0 {
+			consecutive++
+			if consecutive >= 10 {
+				return
+			}
+		} else {
+			consecutive = 0
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s to reach the migration lock", description)
+		case <-ticker.C:
+		}
+	}
 }
