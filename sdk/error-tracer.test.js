@@ -357,6 +357,31 @@ test("capture contains JSON serialization failures", async () => {
   assert.equal(result, false);
 });
 
+test("capture rejects a non-string JSON serialization result", async () => {
+  const original = Object.prototype.toJSON;
+  let result;
+  let transports = 0;
+  try {
+    Object.prototype.toJSON = function omitSerialization() {
+      return undefined;
+    };
+    result = await testClient({
+      transport() {
+        transports++;
+        return true;
+      },
+    }).captureMessage("boom");
+  } finally {
+    if (original === undefined) {
+      delete Object.prototype.toJSON;
+    } else {
+      Object.prototype.toJSON = original;
+    }
+  }
+  assert.equal(result, false);
+  assert.equal(transports, 0);
+});
+
 test("automatically captures runtime, resource, and rejection failures", async () => {
   const events = [];
   const runtime = fakeRuntime();
@@ -687,6 +712,7 @@ test("flush reserves the events queued when it is called", async () => {
   const client = testClient({
     batchSize: 1,
     maxQueueSize: 1,
+    maxEventsPerMinute: 3,
     flushInterval: 0,
     transport(_body, payload) {
       payloads.push(payload);
@@ -712,6 +738,11 @@ test("flush reserves the events queued when it is called", async () => {
     ["one", "two"],
   );
   assert.equal(client.getStats().dropped, 1);
+  assert.equal(await client.captureMessage("four"), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "four"],
+  );
 });
 
 test("bounds snapshots reserved behind a stalled delivery", async () => {

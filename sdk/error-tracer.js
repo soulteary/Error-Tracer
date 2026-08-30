@@ -302,13 +302,14 @@
         this.stats.dropped++;
         return Promise.resolve(false);
       }
-      if (!this.consumeBudget(now.getTime())) {
+      if (!this.hasBudget(now.getTime())) {
         return Promise.resolve(false);
       }
 
       if (!this.enqueue(captured)) {
         return Promise.resolve(false);
       }
+      this.sentAt.push(now.getTime());
       if (this.queue.length >= this.batchSize) {
         if (this.flushPromise) {
           return Promise.resolve(true);
@@ -365,16 +366,12 @@
       });
     }
 
-    consumeBudget(now) {
+    hasBudget(now) {
       const cutoff = now - 60_000;
       while (this.sentAt.length && this.sentAt[0] <= cutoff) {
         this.sentAt.shift();
       }
-      if (this.sentAt.length >= this.maxEventsPerMinute) {
-        return false;
-      }
-      this.sentAt.push(now);
-      return true;
+      return this.sentAt.length < this.maxEventsPerMinute;
     }
 
     enqueue(captured) {
@@ -735,7 +732,8 @@
 
   function safeSerialize(value) {
     try {
-      return JSON.stringify(value);
+      const serialized = JSON.stringify(value);
+      return typeof serialized === "string" ? serialized : null;
     } catch (_) {
       return null;
     }
