@@ -10,11 +10,10 @@ import (
 )
 
 const (
-	defaultRatePerMinute  = 120
-	defaultRateBurst      = 30
-	maxRateLimitClients   = 10_000
-	rateLimitClientTTL    = 10 * time.Minute
-	rateLimitEvictionScan = 64
+	defaultRatePerMinute = 120
+	defaultRateBurst     = 30
+	maxRateLimitClients  = 10_000
+	rateLimitClientTTL   = 10 * time.Minute
 )
 
 type rateBucket struct {
@@ -31,6 +30,8 @@ type rateLimiter struct {
 	maxClients    int
 	now           func() time.Time
 	lastSweepTime time.Time
+	overflow      rateBucket
+	overflowReady bool
 }
 
 func newRateLimiter(perMinute, burst int) *rateLimiter {
@@ -75,11 +76,20 @@ func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Durati
 	}
 
 	bucket, exists := limiter.buckets[client]
+	useOverflow := false
 	if !exists {
 		if len(limiter.buckets) >= limiter.maxClients {
-			limiter.evictBucket(now)
+			// Uncached identities share one bounded overflow budget. Keeping active
+			// client buckets prevents rotating source addresses from resetting an
+			// exhausted quota, while the shared bucket still gives legitimate new
+			// clients a limited path through a saturated cache.
+			bucket = limiter.overflow
+			exists = limiter.overflowReady
+			useOverflow = true
 		}
-		bucket = rateBucket{tokens: limiter.burst, updated: now, lastSeen: now}
+		if !exists {
+			bucket = rateBucket{tokens: limiter.burst, updated: now, lastSeen: now}
+		}
 	}
 	if elapsed := now.Sub(bucket.updated).Seconds(); elapsed > 0 {
 		bucket.tokens = min(limiter.burst, bucket.tokens+elapsed*limiter.perSecond)
@@ -89,35 +99,21 @@ func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Durati
 	required := float64(tokens)
 	if bucket.tokens >= required {
 		bucket.tokens -= required
-		limiter.buckets[client] = bucket
+		limiter.storeBucket(client, bucket, useOverflow)
 		return true, 0
 	}
-	limiter.buckets[client] = bucket
+	limiter.storeBucket(client, bucket, useOverflow)
 	retrySeconds := (required - bucket.tokens) / limiter.perSecond
 	return false, time.Duration(math.Ceil(retrySeconds * float64(time.Second)))
 }
 
-func (limiter *rateLimiter) evictBucket(now time.Time) {
-	oldestKey := ""
-	oldestSeen := now
-	checked := 0
-	for key, bucket := range limiter.buckets {
-		if now.Sub(bucket.lastSeen) >= rateLimitClientTTL {
-			delete(limiter.buckets, key)
-			return
-		}
-		if oldestKey == "" || bucket.lastSeen.Before(oldestSeen) {
-			oldestKey = key
-			oldestSeen = bucket.lastSeen
-		}
-		checked++
-		if checked >= rateLimitEvictionScan {
-			break
-		}
+func (limiter *rateLimiter) storeBucket(client string, bucket rateBucket, overflow bool) {
+	if overflow {
+		limiter.overflow = bucket
+		limiter.overflowReady = true
+		return
 	}
-	if oldestKey != "" {
-		delete(limiter.buckets, oldestKey)
-	}
+	limiter.buckets[client] = bucket
 }
 
 func clientAddress(remoteAddress string) string {

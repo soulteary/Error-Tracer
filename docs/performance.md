@@ -100,8 +100,14 @@ go run ./cmd/error-tracer-loadtest \
   -concurrency 16 \
   -batch-size 50 \
   -cardinality 1000 \
-  -rate 500
+  -rate 20
 ```
+
+The load generator's `-rate` is measured in HTTP requests per second, while
+the server limiter is charged by event count. At 20 requests per second and 50
+events per batch, this example submits 1,000 event tokens per second, matching
+the configured 60,000-token-per-minute refill rate; the burst covers startup
+jitter.
 
 `-target` accepts the service base URL or the complete
 `/api/v1/events/batch` URL. The summary reports:

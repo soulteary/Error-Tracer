@@ -64,7 +64,7 @@ func TestRateLimiterSeparatesClients(t *testing.T) {
 	}
 }
 
-func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
+func TestRateLimiterBoundsAndSharesOverflowBudget(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 3, 0, 0, 0, time.UTC)
 	limiter := newRateLimiter(60, 1)
 	limiter.maxClients = 2
@@ -73,13 +73,22 @@ func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
 	limiter.Allow("client-a")
 	limiter.Allow("client-b")
 	if allowed, retryAfter := limiter.Allow("client-c"); !allowed || retryAfter != 0 {
-		t.Fatalf("overflow client = (%v, %s), want admitted after eviction", allowed, retryAfter)
+		t.Fatalf("first overflow client = (%v, %s), want admitted", allowed, retryAfter)
 	}
 	if len(limiter.buckets) != 2 {
 		t.Fatalf("buckets = %d, want bounded at 2", len(limiter.buckets))
 	}
-	if _, exists := limiter.buckets["client-c"]; !exists {
-		t.Fatal("new client was not retained after eviction")
+	if _, exists := limiter.buckets["client-c"]; exists {
+		t.Fatal("overflow client unexpectedly displaced a retained bucket")
+	}
+	if allowed, retryAfter := limiter.Allow("client-d"); allowed || retryAfter != time.Second {
+		t.Fatalf("rotated overflow client = (%v, %s), want shared-budget rejection for 1s", allowed, retryAfter)
+	}
+	if allowed, _ := limiter.Allow("client-c"); allowed {
+		t.Fatal("returning overflow client reset the shared budget")
+	}
+	if allowed, _ := limiter.Allow("client-a"); allowed {
+		t.Fatal("saturated traffic reset an existing client bucket")
 	}
 
 	now = now.Add(rateLimitClientTTL)

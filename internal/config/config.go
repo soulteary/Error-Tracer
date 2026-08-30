@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -193,7 +194,18 @@ func parseOrigins(value string) ([]string, error) {
 		if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 			return nil, fmt.Errorf("ERROR_TRACER_ALLOWED_ORIGINS value %q must not contain credentials, a path, query, or fragment", raw)
 		}
-		origin := scheme + "://" + strings.ToLower(parsed.Host)
+		hostname := strings.ToLower(parsed.Hostname())
+		port := parsed.Port()
+		if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
+			port = ""
+		}
+		host := hostname
+		if port != "" {
+			host = net.JoinHostPort(hostname, port)
+		} else if strings.Contains(hostname, ":") {
+			host = "[" + hostname + "]"
+		}
+		origin := scheme + "://" + host
 		if _, exists := seen[origin]; exists {
 			continue
 		}
