@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestRateLimiterSeparatesClients(t *testing.T) {
 	}
 }
 
-func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
+func TestRateLimiterBoundsAndSharesOverflowBudget(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 3, 0, 0, 0, time.UTC)
 	limiter := newRateLimiter(60, 1)
 	limiter.maxClients = 2
@@ -71,11 +72,23 @@ func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
 
 	limiter.Allow("client-a")
 	limiter.Allow("client-b")
-	if allowed, retryAfter := limiter.Allow("client-c"); allowed || retryAfter != time.Minute {
-		t.Fatalf("overflow client = (%v, %s), want rejected for 1m", allowed, retryAfter)
+	if allowed, retryAfter := limiter.Allow("client-c"); !allowed || retryAfter != 0 {
+		t.Fatalf("first overflow client = (%v, %s), want admitted", allowed, retryAfter)
 	}
 	if len(limiter.buckets) != 2 {
 		t.Fatalf("buckets = %d, want bounded at 2", len(limiter.buckets))
+	}
+	if _, exists := limiter.buckets["client-c"]; exists {
+		t.Fatal("overflow client unexpectedly displaced a retained bucket")
+	}
+	if allowed, retryAfter := limiter.Allow("client-d"); allowed || retryAfter != time.Second {
+		t.Fatalf("rotated overflow client = (%v, %s), want shared-budget rejection for 1s", allowed, retryAfter)
+	}
+	if allowed, _ := limiter.Allow("client-c"); allowed {
+		t.Fatal("returning overflow client reset the shared budget")
+	}
+	if allowed, _ := limiter.Allow("client-a"); allowed {
+		t.Fatal("saturated traffic reset an existing client bucket")
 	}
 
 	now = now.Add(rateLimitClientTTL)
@@ -84,6 +97,35 @@ func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
 	}
 	if len(limiter.buckets) != 1 {
 		t.Fatalf("buckets after sweep = %d, want 1", len(limiter.buckets))
+	}
+}
+
+func TestRateLimiterChargesWeightedRequestsAtomically(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 3, 0, 0, 0, time.UTC)
+	limiter := newRateLimiter(60, 3)
+	limiter.now = func() time.Time { return now }
+
+	if allowed, _ := limiter.AllowN("client", 3); !allowed {
+		t.Fatal("weighted request within the burst was rejected")
+	}
+	if allowed, retryAfter := limiter.Allow("client"); allowed || retryAfter != time.Second {
+		t.Fatalf("post-batch request = (%v, %s), want rejected for 1s", allowed, retryAfter)
+	}
+	now = now.Add(time.Second)
+	if allowed, _ := limiter.Allow("client"); !allowed {
+		t.Fatal("refilled token was not available")
+	}
+
+	other := newRateLimiter(60, 3)
+	other.now = func() time.Time { return now }
+	if allowed, retryAfter := other.AllowN("client", 4); allowed || retryAfter != rateLimitRetryNever {
+		t.Fatalf(
+			"request larger than the burst = (%v, %s), want permanent rejection",
+			allowed, retryAfter,
+		)
+	}
+	if len(other.buckets) != 0 {
+		t.Fatalf("permanently rejected request created a bucket: %#v", other.buckets)
 	}
 }
 
@@ -171,6 +213,164 @@ func TestIngestRateLimitUsesRemoteAddress(t *testing.T) {
 	}
 	if page.Total != 1 || page.Issues[0].Occurrences != 2 {
 		t.Fatalf("stored page = %#v, want one issue with two accepted events", page)
+	}
+}
+
+func TestIngestBatchConsumesOneTokenPerEvent(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:         memory,
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(body))
+	request.RemoteAddr = "192.0.2.10:1000"
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("batch status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+
+	next := eventRequest(http.MethodPost)
+	next.RemoteAddr = "192.0.2.10:2000"
+	nextResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(nextResponse, next)
+	if nextResponse.Code != http.StatusTooManyRequests {
+		t.Fatalf("post-batch status = %d, want %d", nextResponse.Code, http.StatusTooManyRequests)
+	}
+}
+
+func TestIngestBatchRetryAfterIncludesTheWholeAtomicCharge(t *testing.T) {
+	now := time.Date(2026, time.August, 30, 20, 0, 0, 0, time.UTC)
+	app := New(Options{
+		Store:         store.NewMemory(),
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	app.requestLimiter.now = func() time.Time { return now }
+	app.ingestLimiter.now = func() time.Time { return now }
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"}]}`
+	submit := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+		)
+		request.RemoteAddr = "192.0.2.10:1000"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+
+	if response := submit(); response.Code != http.StatusAccepted {
+		t.Fatalf("initial batch status = %d, want %d", response.Code, http.StatusAccepted)
+	}
+	rejected := submit()
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("empty-budget batch status = %d, want %d", rejected.Code, http.StatusTooManyRequests)
+	}
+	if got := rejected.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("Retry-After = %q, want 3 for the complete batch", got)
+	}
+
+	now = now.Add(3 * time.Second)
+	if response := submit(); response.Code != http.StatusAccepted {
+		t.Fatalf(
+			"batch after advertised delay = %d, want %d; body = %s",
+			response.Code, http.StatusAccepted, response.Body.String(),
+		)
+	}
+}
+
+func TestIngestBatchLargerThanBurstIsPermanentlyRejected(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:         memory,
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"},` +
+		`{"kind":"error","message":"four"}]}`
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+	)
+	request.RemoteAddr = "192.0.2.10:1000"
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"over-burst batch status = %d, want %d; body = %s",
+			response.Code, http.StatusUnprocessableEntity, response.Body.String(),
+		)
+	}
+	if got := response.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("over-burst Retry-After = %q, want no retry advice", got)
+	}
+	var failure errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode over-burst response: %v", err)
+	}
+	if failure.Error != "rate_limit_burst_exceeded" {
+		t.Fatalf("over-burst error = %q, want rate_limit_burst_exceeded", failure.Error)
+	}
+	if len(app.ingestLimiter.buckets) != 0 {
+		t.Fatal("over-burst batch consumed or allocated an event bucket")
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list issues after over-burst batch: %v", err)
+	}
+	if page.Total != 0 {
+		t.Fatalf("over-burst batch stored %d issues, want none", page.Total)
+	}
+}
+
+func TestInvalidIngestRequestsUseASeparateRequestBudget(t *testing.T) {
+	app := New(Options{
+		Store:         store.NewMemory(),
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     1,
+	})
+	submit := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/events", strings.NewReader(`{"broken":`),
+		)
+		request.RemoteAddr = "192.0.2.10:1000"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+
+	if response := submit(); response.Code != http.StatusBadRequest {
+		t.Fatalf("first invalid request status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if len(app.ingestLimiter.buckets) != 0 {
+		t.Fatal("invalid request consumed the validated-event budget")
+	}
+	if response := submit(); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("second invalid request status = %d, want %d", response.Code, http.StatusTooManyRequests)
 	}
 }
 

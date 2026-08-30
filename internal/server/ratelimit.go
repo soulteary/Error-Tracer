@@ -14,6 +14,7 @@ const (
 	defaultRateBurst     = 30
 	maxRateLimitClients  = 10_000
 	rateLimitClientTTL   = 10 * time.Minute
+	rateLimitRetryNever  = time.Duration(-1)
 )
 
 type rateBucket struct {
@@ -30,6 +31,8 @@ type rateLimiter struct {
 	maxClients    int
 	now           func() time.Time
 	lastSweepTime time.Time
+	overflow      rateBucket
+	overflowReady bool
 }
 
 func newRateLimiter(perMinute, burst int) *rateLimiter {
@@ -52,6 +55,20 @@ func newRateLimiter(perMinute, burst int) *rateLimiter {
 // available. The map is bounded so unique-source floods cannot grow memory
 // without limit.
 func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
+	return limiter.AllowN(client, 1)
+}
+
+// AllowN atomically consumes a positive number of tokens for one client. It
+// returns rateLimitRetryNever when the requested weight can never fit within
+// the configured burst.
+func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Duration) {
+	if tokens <= 0 {
+		return true, 0
+	}
+	required := float64(tokens)
+	if required > limiter.burst {
+		return false, rateLimitRetryNever
+	}
 	now := limiter.now()
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
@@ -66,25 +83,43 @@ func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
 	}
 
 	bucket, exists := limiter.buckets[client]
+	useOverflow := false
 	if !exists {
 		if len(limiter.buckets) >= limiter.maxClients {
-			return false, time.Minute
+			// Uncached identities share one bounded overflow budget. Keeping active
+			// client buckets prevents rotating source addresses from resetting an
+			// exhausted quota, while the shared bucket still gives legitimate new
+			// clients a limited path through a saturated cache.
+			bucket = limiter.overflow
+			exists = limiter.overflowReady
+			useOverflow = true
 		}
-		bucket = rateBucket{tokens: limiter.burst, updated: now, lastSeen: now}
+		if !exists {
+			bucket = rateBucket{tokens: limiter.burst, updated: now, lastSeen: now}
+		}
 	}
 	if elapsed := now.Sub(bucket.updated).Seconds(); elapsed > 0 {
 		bucket.tokens = min(limiter.burst, bucket.tokens+elapsed*limiter.perSecond)
 		bucket.updated = now
 	}
 	bucket.lastSeen = now
-	if bucket.tokens >= 1 {
-		bucket.tokens--
-		limiter.buckets[client] = bucket
+	if bucket.tokens >= required {
+		bucket.tokens -= required
+		limiter.storeBucket(client, bucket, useOverflow)
 		return true, 0
 	}
-	limiter.buckets[client] = bucket
-	retrySeconds := (1 - bucket.tokens) / limiter.perSecond
+	limiter.storeBucket(client, bucket, useOverflow)
+	retrySeconds := (required - bucket.tokens) / limiter.perSecond
 	return false, time.Duration(math.Ceil(retrySeconds * float64(time.Second)))
+}
+
+func (limiter *rateLimiter) storeBucket(client string, bucket rateBucket, overflow bool) {
+	if overflow {
+		limiter.overflow = bucket
+		limiter.overflowReady = true
+		return
+	}
+	limiter.buckets[client] = bucket
 }
 
 func clientAddress(remoteAddress string) string {

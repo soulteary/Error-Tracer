@@ -23,8 +23,31 @@ func (s *Server) allowIngestRequest(w http.ResponseWriter, request *http.Request
 	if !s.allowEventOrigin(w, request) {
 		return false
 	}
-	allowed, retryAfter := s.ingestLimiter.Allow(clientAddress(request.RemoteAddr))
+	return allowRateLimit(w, request, s.requestLimiter, 1)
+}
+
+func (s *Server) allowIngestTokens(
+	w http.ResponseWriter,
+	request *http.Request,
+	tokens int,
+) bool {
+	return allowRateLimit(w, request, s.ingestLimiter, tokens)
+}
+
+func allowRateLimit(
+	w http.ResponseWriter,
+	request *http.Request,
+	limiter *rateLimiter,
+	tokens int,
+) bool {
+	allowed, retryAfter := limiter.AllowN(clientAddress(request.RemoteAddr), tokens)
 	if !allowed {
+		if retryAfter == rateLimitRetryNever {
+			writeJSON(w, http.StatusUnprocessableEntity, errorResponse{
+				Error: "rate_limit_burst_exceeded",
+			})
+			return false
+		}
 		w.Header().Set("Retry-After", retryAfterHeader(retryAfter))
 		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})
 		return false
