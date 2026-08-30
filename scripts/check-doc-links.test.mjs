@@ -40,6 +40,25 @@ test("ignores GitHub footnote definitions", () => {
   ].join("\n")), []);
 });
 
+test("ignores prose that resembles a reference definition", () => {
+  assert.deepEqual(markdownTargets([
+    "[status]: Not yet available",
+    "[owner]: Documentation team",
+  ].join("\n")), []);
+});
+
+test("extracts definitions nested in block containers", () => {
+  assert.deepEqual(markdownTargets([
+    "> [quoted]: docs/quoted.md",
+    "- [listed]: <docs/listed.md> \"Listed guide\"",
+    "1. > [nested]: docs/nested.md 'Nested guide'",
+  ].join("\n")), [
+    "docs/quoted.md",
+    "docs/listed.md",
+    "docs/nested.md",
+  ]);
+});
+
 test("extracts reference destinations continued on the next line", () => {
   assert.deepEqual(markdownTargets([
     "[guide]:",
