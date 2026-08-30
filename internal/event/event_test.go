@@ -251,6 +251,24 @@ func TestFingerprintAcceptsAtSignsInsideFirefoxFrameURLs(t *testing.T) {
 	}
 }
 
+func TestFingerprintSkipsV8PseudoFramesWithoutCoordinates(t *testing.T) {
+	first := Event{
+		Kind:    KindUnhandledRejection,
+		Message: "request failed",
+		Stack: "Error: request failed\n" +
+			"    at async Promise.all (index 0)\n" +
+			"    at checkout (/app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request failed\n" +
+		"    at new Promise (<anonymous>)\n" +
+		"    at payment (/app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("coordinate-free V8 pseudo-frames hid different source call sites")
+	}
+}
+
 func TestFingerprintCanonicalizesStackFrameURL(t *testing.T) {
 	first := Event{
 		Kind:    KindError,

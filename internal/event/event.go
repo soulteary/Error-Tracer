@@ -241,7 +241,7 @@ func firstStackFrame(stack string) string {
 		if firstLine == "" {
 			firstLine = line
 		}
-		if strings.HasPrefix(line, "at ") {
+		if isV8StackFrame(line) {
 			return canonicalizeStackFrame(line)
 		}
 		if firefoxStackFramePattern.MatchString(line) {
@@ -261,6 +261,17 @@ func firstStackLine(stack string) string {
 }
 
 var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@\S+:\d+(?::\d+)?$`)
+
+func isV8StackFrame(frame string) bool {
+	if !strings.HasPrefix(frame, "at ") {
+		return false
+	}
+	location := strings.TrimSpace(strings.TrimPrefix(frame, "at "))
+	if open := strings.LastIndexByte(location, '('); open >= 0 && strings.HasSuffix(location, ")") {
+		location = location[open+1 : len(location)-1]
+	}
+	return stackPositionPattern.MatchString(location)
+}
 
 func canonicalizeStackFrame(frame string) string {
 	if strings.HasPrefix(frame, "at ") {
