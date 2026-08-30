@@ -53,7 +53,9 @@ jobs:
           version="${tag#v}"
           expected="$(tr -d '[:space:]' < VERSION)"
           package_version="$(node -p 'require("./package.json").version')"
-          if [[ "${version}" != "${expected}" || "${version}" != "${package_version}" ]]; then
+          if [[ "${version}" == "${expected}" && "${version}" == "${package_version}" ]]; then
+            :
+          else
             echo "tag, VERSION, and package.json version must match" >&2
             exit 1
           fi
@@ -67,12 +69,14 @@ jobs:
           source_epoch="$(git show -s --format=%ct HEAD)"
           build_date="$(date -u -d "@${source_epoch}" +%Y-%m-%dT%H:%M:%SZ)"
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          echo "VERSION=${version}" >> "${GITHUB_ENV}"
-          echo "SOURCE_DATE_EPOCH=${source_epoch}" >> "${GITHUB_ENV}"
-          echo "BUILD_DATE=${build_date}" >> "${GITHUB_ENV}"
-          echo "IMAGE=${image}" >> "${GITHUB_ENV}"
-          echo "MAJOR=${version%%.*}" >> "${GITHUB_ENV}"
-          echo "MINOR=${version%.*}" >> "${GITHUB_ENV}"
+          {
+            echo "VERSION=${version}"
+            echo "SOURCE_DATE_EPOCH=${source_epoch}"
+            echo "BUILD_DATE=${build_date}"
+            echo "IMAGE=${image}"
+            echo "MAJOR=${version%%.*}"
+            echo "MINOR=${version%.*}"
+          } >> "${GITHUB_ENV}"
 
       - name: Verify source
         run: |
@@ -162,7 +166,7 @@ jobs:
           }
           trap cleanup EXIT
           host_port="$(docker port "${container_id}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
-          for attempt in {1..20}; do
+          for _ in {1..20}; do
             if curl --fail --silent --show-error \
               "http://127.0.0.1:${host_port}/api/v1/meta" > /tmp/error-tracer-candidate-meta.json; then
               break
@@ -200,7 +204,7 @@ jobs:
           }
           trap cleanup EXIT
           host_port="$(docker port "${container_id}" 8080/tcp | awk -F: 'NR == 1 { print $NF }')"
-          for attempt in {1..20}; do
+          for _ in {1..20}; do
             if curl --fail --silent --show-error \
               "http://127.0.0.1:${host_port}/api/v1/meta" > /tmp/error-tracer-meta.json; then
               break
