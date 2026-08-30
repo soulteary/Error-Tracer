@@ -128,6 +128,8 @@ func TestDashboardScriptAvoidsCredentialPersistenceAndHTMLInjection(t *testing.T
 		`searchParams.set("demo", "1")`,
 		`searchParams.delete("demo")`,
 		`metadata.demo_only === true`,
+		`metadata.version === "string"`,
+		`#build-version`,
 	} {
 		if !strings.Contains(dashboardScript.body, marker) {
 			t.Fatalf("dashboard script does not contain demo marker %q", marker)

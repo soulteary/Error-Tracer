@@ -30,6 +30,9 @@ func TestDemoMetadataIsDisabledByDefault(t *testing.T) {
 	if metadata.DemoMode {
 		t.Fatal("demo_mode = true, want false")
 	}
+	if metadata.Version != "2.0.0-dev" {
+		t.Fatalf("version = %q, want development version", metadata.Version)
+	}
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}

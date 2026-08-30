@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/soulteary/Error-Tracer/internal/buildinfo"
 	"github.com/soulteary/Error-Tracer/internal/event"
 	"github.com/soulteary/Error-Tracer/internal/store"
 )
@@ -14,8 +15,9 @@ import (
 const demoProjectID = "error-tracer-demo"
 
 type publicMetadataResponse struct {
-	DemoMode bool `json:"demo_mode"`
-	DemoOnly bool `json:"demo_only,omitempty"`
+	DemoMode bool   `json:"demo_mode"`
+	DemoOnly bool   `json:"demo_only,omitempty"`
+	Version  string `json:"version"`
 }
 
 type demoFixture struct {
@@ -30,6 +32,7 @@ func (s *Server) publicMetadata(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, publicMetadataResponse{
 		DemoMode: s.demoStore != nil,
 		DemoOnly: s.demoOnly,
+		Version:  buildinfo.Current().Version,
 	})
 }
 

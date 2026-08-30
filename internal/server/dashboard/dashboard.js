@@ -7,6 +7,7 @@
     en: {
       "brand.homeAria": "Error-Tracer home",
       "brand.tagline": "browser failure observatory",
+      "build.version": "Error-Tracer version",
       "language.label": "Language",
       "connection.connected": "Connected",
       "connection.demo": "Read-only demo",
@@ -94,6 +95,7 @@
     "zh-CN": {
       "brand.homeAria": "Error-Tracer 首页",
       "brand.tagline": "浏览器错误观测台",
+      "build.version": "Error-Tracer 版本",
       "language.label": "语言",
       "connection.connected": "已连接",
       "connection.demo": "只读演示",
@@ -181,6 +183,7 @@
   };
 
   const elements = {
+    buildVersion: document.querySelector("#build-version"),
     language: document.querySelector("#language-select"),
     connection: document.querySelector("#connection-status"),
     connectionLabel: document.querySelector("#connection-label"),
@@ -829,6 +832,10 @@
         return;
       }
       const metadata = await response.json();
+      if (typeof metadata.version === "string" && metadata.version.trim()) {
+        elements.buildVersion.textContent = `v${metadata.version.trim()}`;
+        elements.buildVersion.hidden = false;
+      }
       const available = metadata.demo_mode === true;
       state.demoOnly = metadata.demo_only === true;
       elements.demo.hidden = !available || state.demoOnly;

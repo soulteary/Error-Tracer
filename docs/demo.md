@@ -1,22 +1,34 @@
 # Demo mode
 
-## Configuration-free product tour
+## Source checkout: one command
 
-The shortest path to the sample dashboard is the dedicated demo command:
+From a source checkout, use the dedicated demo command:
 
 ```sh
 go run ./cmd/error-tracer demo
 ```
 
-Open <http://127.0.0.1:8080/>. The dashboard enters the read-only sample
+The process prints the direct URL. The dashboard enters the read-only sample
 workspace immediately. Unless `ERROR_TRACER_ADDRESS` is set, the source command
 listens only on loopback.
 
-The same tour can run from the container image:
+## Published container or downloaded binary
+
+After v2.0.0 is published, start the isolated sample dashboard directly from
+GHCR without a source checkout:
 
 ```sh
-docker build -t error-tracer:demo .
-docker run --rm --read-only -p 127.0.0.1:8080:8080 error-tracer:demo demo
+docker run --rm --pull=always --read-only --cap-drop=ALL \
+  --security-opt=no-new-privileges:true \
+  -p 127.0.0.1:8080:8080 ghcr.io/soulteary/error-tracer:2 demo
+```
+
+Release images target Linux AMD64 and ARM64 and include provenance and SBOM
+attestations. A downloaded release binary uses the same demo command:
+
+```sh
+./error-tracer version
+./error-tracer demo
 ```
 
 Demo-only startup does not require an ingest key or admin token, does not open
@@ -70,7 +82,7 @@ The demo is deliberately separate from production data:
 - In `error-tracer demo` mode, collection and management routes are not
   registered at all.
 - The dashboard disables status changes while the demo is active.
-- `/api/v1/meta` reveals only whether demo mode is enabled.
+- `/api/v1/meta` reveals only the service version and whether demo mode is enabled.
 
 Because the demo routes are public when enabled, do not put secrets or copied
 production payloads into the built-in fixtures. Disable demo mode on deployments
@@ -80,7 +92,7 @@ that do not need a public product tour.
 
 | Method | Path | Result |
 | --- | --- | --- |
-| `GET` | `/api/v1/meta` | Demo availability; also `"demo_only":true` for the demo command |
+| `GET` | `/api/v1/meta` | Service version and demo availability; also `"demo_only":true` for the demo command |
 | `GET` | `/api/v1/demo/issues` | Paginated built-in issue list |
 | `GET` | `/api/v1/demo/issues?status=open` | Built-in issues filtered by status |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | One built-in issue and its latest event |

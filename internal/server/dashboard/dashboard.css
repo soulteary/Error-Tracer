@@ -120,6 +120,13 @@ a:focus-visible {
   gap: 16px;
 }
 
+.build-version {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
 .language-control select {
   min-height: 34px;
   padding: 0 30px 0 10px;

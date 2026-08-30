@@ -139,3 +139,19 @@ func TestDemoAddressDefaultsToLoopback(t *testing.T) {
 		t.Fatalf("demoAddress() = %q, want trimmed override", got)
 	}
 }
+
+func TestDemoURLUsesABrowserReachableHost(t *testing.T) {
+	for _, test := range []struct {
+		address string
+		want    string
+	}{
+		{":8080", "http://127.0.0.1:8080/?demo=1"},
+		{"0.0.0.0:9090", "http://127.0.0.1:9090/?demo=1"},
+		{"[::]:8080", "http://[::1]:8080/?demo=1"},
+		{"localhost:8080", "http://localhost:8080/?demo=1"},
+	} {
+		if got := demoURL(test.address); got != test.want {
+			t.Errorf("demoURL(%q) = %q, want %q", test.address, got, test.want)
+		}
+	}
+}
