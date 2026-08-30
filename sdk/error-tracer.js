@@ -395,10 +395,7 @@
         this.reservedCount += pending.length;
       }
       const send = () => {
-        if (active) {
-          this.reservedCount -= pending.length;
-        }
-        return this.sendPending(pending);
+        return this.sendPending(pending, Boolean(active));
       };
       const delivery = active
         ? active.then(
@@ -422,15 +419,22 @@
       return tracked;
     }
 
-    sendPending(pending) {
+    sendPending(pending, reserved) {
       const grouped = this.makeBatches(pending);
       if (grouped.rejected) {
+        if (reserved) {
+          this.reservedCount -= grouped.rejected;
+        }
         this.stats.failed += grouped.rejected;
         this.stats.dropped += grouped.rejected;
       }
       return grouped.batches.reduce(
-        (result, events) => result.then((accepted) =>
-          this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted)),
+        (result, events) => result.then((accepted) => {
+          if (reserved) {
+            this.reservedCount -= events.length;
+          }
+          return this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted);
+        }),
         Promise.resolve(grouped.rejected === 0),
       );
     }
