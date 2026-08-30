@@ -196,6 +196,17 @@ test("respects ordered-list paragraph interruption rules", () => {
   ]);
 });
 
+test("preserves outer list context for nested interruptions", () => {
+  assert.deepEqual(markdownTargets([
+    "- Outer paragraph",
+    "  2. [continued]: docs/not-a-definition.md",
+  ].join("\n")), []);
+  assert.deepEqual(markdownTargets([
+    "- Outer paragraph",
+    "  1. [nested]: docs/nested.md",
+  ].join("\n")), ["docs/nested.md"]);
+});
+
 test("does not let reference definitions interrupt paragraphs", () => {
   assert.deepEqual(markdownTargets([
     "Top-level paragraph",

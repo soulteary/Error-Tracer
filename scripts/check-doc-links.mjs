@@ -49,8 +49,24 @@ export function markdownTargets(contents) {
   }
   const lines = markdown.split("\n");
   const paragraphCache = new Map();
+  let activeContainers = [];
   for (let index = 0; index < lines.length; index++) {
-    const definition = referenceDefinitionAt(lines, index, true, paragraphCache);
+    const listCanInterrupt = (containers) =>
+      !paragraphOpenBefore(lines, index, containers, paragraphCache);
+    const parsedLine = activeContainers.length
+      ? parseContinuedBlockContainers(
+        lines[index],
+        activeContainers,
+        paragraphOpenBefore(
+          lines, index, activeContainers, paragraphCache,
+        ),
+        listCanInterrupt,
+      )
+      : parseBlockContainers(lines[index], listCanInterrupt);
+    activeContainers = parsedLine.containers;
+    const definition = referenceDefinitionAt(
+      lines, index, true, paragraphCache, parsedLine,
+    );
     if (definition) {
       targets.push(definition.target);
       index += definition.consumed;
@@ -64,8 +80,9 @@ function referenceDefinitionAt(
   index,
   checkParagraphInterruption = true,
   paragraphCache = null,
+  parsedLineOverride = null,
 ) {
-  const parsedLine = parseBlockContainers(lines[index]);
+  const parsedLine = parsedLineOverride || parseBlockContainers(lines[index]);
   const match = parsedLine.content.match(
     /^[ \t]{0,3}\[(?!\^)((?:\\.|[^\]\\\n])+)\]:[ \t]*(.*)$/,
   );
@@ -329,7 +346,8 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
   const cache = paragraphCache || new Map();
   const key = containers.map((container) => container.type === "quote"
     ? "quote"
-    : `list:${container.indent}:${container.orderedStart ?? "bullet"}`).join("/");
+    : `list:${container.markerIndent}:${container.indent}:` +
+      (container.orderedStart === null ? "bullet" : "ordered")).join("/");
   let state = cache.get(key);
   if (!state || state.index > index) {
     state = { index: 0, paragraphOpen: false };
@@ -341,7 +359,9 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     if (startsNewListItem(lines[previous], containers)) {
       state.paragraphOpen = false;
     }
-    const content = continueBlockContainers(lines[previous], containers);
+    const content = paragraphContentWithinContainers(
+      lines[previous], containers,
+    );
     if (content === null) {
       state.paragraphOpen = state.paragraphOpen &&
         lazyParagraphContinuation(lines[previous], containers);
@@ -389,6 +409,31 @@ function paragraphOpenAfter(line, paragraphOpen) {
 function continueBlockContainers(line, containers) {
   const continued = blockContainerPrefix(line, containers);
   return continued.count === containers.length ? continued.content : null;
+}
+
+function paragraphContentWithinContainers(line, containers) {
+  let remaining = line.replace(/\r$/, "");
+  for (const container of containers) {
+    if (container.type === "quote") {
+      const quote = remaining.match(/^ {0,3}>[ \t]?/);
+      if (!quote) {
+        return null;
+      }
+      remaining = remaining.slice(quote[0].length);
+      continue;
+    }
+    const marker = listMarkerPrefix(remaining);
+    if (marker?.markerIndent === container.markerIndent) {
+      remaining = remaining.slice(marker.length);
+      continue;
+    }
+    const stripped = stripIndent(remaining, container.indent);
+    if (stripped === null) {
+      return null;
+    }
+    remaining = stripped;
+  }
+  return remaining;
 }
 
 function blockContainerPrefix(line, containers) {
