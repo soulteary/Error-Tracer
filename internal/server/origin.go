@@ -23,7 +23,15 @@ func (s *Server) allowIngestRequest(w http.ResponseWriter, request *http.Request
 	if !s.allowEventOrigin(w, request) {
 		return false
 	}
-	allowed, retryAfter := s.ingestLimiter.Allow(clientAddress(request.RemoteAddr))
+	return s.allowIngestTokens(w, request, 1)
+}
+
+func (s *Server) allowIngestTokens(
+	w http.ResponseWriter,
+	request *http.Request,
+	tokens int,
+) bool {
+	allowed, retryAfter := s.ingestLimiter.AllowN(clientAddress(request.RemoteAddr), tokens)
 	if !allowed {
 		w.Header().Set("Retry-After", retryAfterHeader(retryAfter))
 		writeJSON(w, http.StatusTooManyRequests, errorResponse{Error: "rate_limited"})

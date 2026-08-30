@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,11 +72,14 @@ func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
 
 	limiter.Allow("client-a")
 	limiter.Allow("client-b")
-	if allowed, retryAfter := limiter.Allow("client-c"); allowed || retryAfter != time.Minute {
-		t.Fatalf("overflow client = (%v, %s), want rejected for 1m", allowed, retryAfter)
+	if allowed, retryAfter := limiter.Allow("client-c"); !allowed || retryAfter != 0 {
+		t.Fatalf("overflow client = (%v, %s), want admitted after eviction", allowed, retryAfter)
 	}
 	if len(limiter.buckets) != 2 {
 		t.Fatalf("buckets = %d, want bounded at 2", len(limiter.buckets))
+	}
+	if _, exists := limiter.buckets["client-c"]; !exists {
+		t.Fatal("new client was not retained after eviction")
 	}
 
 	now = now.Add(rateLimitClientTTL)
@@ -84,6 +88,32 @@ func TestRateLimiterBoundsAndExpiresClientBuckets(t *testing.T) {
 	}
 	if len(limiter.buckets) != 1 {
 		t.Fatalf("buckets after sweep = %d, want 1", len(limiter.buckets))
+	}
+}
+
+func TestRateLimiterChargesWeightedRequestsAtomically(t *testing.T) {
+	now := time.Date(2026, time.August, 29, 3, 0, 0, 0, time.UTC)
+	limiter := newRateLimiter(60, 3)
+	limiter.now = func() time.Time { return now }
+
+	if allowed, _ := limiter.AllowN("client", 3); !allowed {
+		t.Fatal("weighted request within the burst was rejected")
+	}
+	if allowed, retryAfter := limiter.Allow("client"); allowed || retryAfter != time.Second {
+		t.Fatalf("post-batch request = (%v, %s), want rejected for 1s", allowed, retryAfter)
+	}
+	now = now.Add(time.Second)
+	if allowed, _ := limiter.Allow("client"); !allowed {
+		t.Fatal("refilled token was not available")
+	}
+
+	other := newRateLimiter(60, 3)
+	other.now = func() time.Time { return now }
+	if allowed, _ := other.AllowN("client", 4); allowed {
+		t.Fatal("request larger than the burst was accepted")
+	}
+	if bucket := other.buckets["client"]; bucket.tokens != 3 {
+		t.Fatalf("rejected weighted request consumed tokens: %#v", bucket)
 	}
 }
 
@@ -171,6 +201,38 @@ func TestIngestRateLimitUsesRemoteAddress(t *testing.T) {
 	}
 	if page.Total != 1 || page.Issues[0].Occurrences != 2 {
 		t.Fatalf("stored page = %#v, want one issue with two accepted events", page)
+	}
+}
+
+func TestIngestBatchConsumesOneTokenPerEvent(t *testing.T) {
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:         memory,
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/events/batch", strings.NewReader(body))
+	request.RemoteAddr = "192.0.2.10:1000"
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("batch status = %d, want %d; body = %s", response.Code, http.StatusAccepted, response.Body.String())
+	}
+
+	next := eventRequest(http.MethodPost)
+	next.RemoteAddr = "192.0.2.10:2000"
+	nextResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(nextResponse, next)
+	if nextResponse.Code != http.StatusTooManyRequests {
+		t.Fatalf("post-batch status = %d, want %d", nextResponse.Code, http.StatusTooManyRequests)
 	}
 }
 

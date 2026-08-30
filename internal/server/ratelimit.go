@@ -10,10 +10,11 @@ import (
 )
 
 const (
-	defaultRatePerMinute = 120
-	defaultRateBurst     = 30
-	maxRateLimitClients  = 10_000
-	rateLimitClientTTL   = 10 * time.Minute
+	defaultRatePerMinute  = 120
+	defaultRateBurst      = 30
+	maxRateLimitClients   = 10_000
+	rateLimitClientTTL    = 10 * time.Minute
+	rateLimitEvictionScan = 64
 )
 
 type rateBucket struct {
@@ -52,6 +53,14 @@ func newRateLimiter(perMinute, burst int) *rateLimiter {
 // available. The map is bounded so unique-source floods cannot grow memory
 // without limit.
 func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
+	return limiter.AllowN(client, 1)
+}
+
+// AllowN atomically consumes a positive number of tokens for one client.
+func (limiter *rateLimiter) AllowN(client string, tokens int) (bool, time.Duration) {
+	if tokens <= 0 {
+		return true, 0
+	}
 	now := limiter.now()
 	limiter.mu.Lock()
 	defer limiter.mu.Unlock()
@@ -68,7 +77,7 @@ func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
 	bucket, exists := limiter.buckets[client]
 	if !exists {
 		if len(limiter.buckets) >= limiter.maxClients {
-			return false, time.Minute
+			limiter.evictBucket(now)
 		}
 		bucket = rateBucket{tokens: limiter.burst, updated: now, lastSeen: now}
 	}
@@ -77,14 +86,38 @@ func (limiter *rateLimiter) Allow(client string) (bool, time.Duration) {
 		bucket.updated = now
 	}
 	bucket.lastSeen = now
-	if bucket.tokens >= 1 {
-		bucket.tokens--
+	required := float64(tokens)
+	if bucket.tokens >= required {
+		bucket.tokens -= required
 		limiter.buckets[client] = bucket
 		return true, 0
 	}
 	limiter.buckets[client] = bucket
-	retrySeconds := (1 - bucket.tokens) / limiter.perSecond
+	retrySeconds := (required - bucket.tokens) / limiter.perSecond
 	return false, time.Duration(math.Ceil(retrySeconds * float64(time.Second)))
+}
+
+func (limiter *rateLimiter) evictBucket(now time.Time) {
+	oldestKey := ""
+	oldestSeen := now
+	checked := 0
+	for key, bucket := range limiter.buckets {
+		if now.Sub(bucket.lastSeen) >= rateLimitClientTTL {
+			delete(limiter.buckets, key)
+			return
+		}
+		if oldestKey == "" || bucket.lastSeen.Before(oldestSeen) {
+			oldestKey = key
+			oldestSeen = bucket.lastSeen
+		}
+		checked++
+		if checked >= rateLimitEvictionScan {
+			break
+		}
+	}
+	if oldestKey != "" {
+		delete(limiter.buckets, oldestKey)
+	}
 }
 
 func clientAddress(remoteAddress string) string {

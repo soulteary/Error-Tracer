@@ -156,6 +156,10 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 1 MiB。所有事件都会在修改 SQLite 之前完成规范化和校验，之后的全部
 UPSERT 在同一个事务中执行：
 
+限流按事件数扣费，而不是按 HTTP 请求数扣费。请将
+`ERROR_TRACER_RATE_BURST` 设置为不小于客户端允许提交的最大批次；事件数
+超过突发量配置的批次会被拒绝。
+
 ```json
 {
   "project_key": "替换为采集密钥",

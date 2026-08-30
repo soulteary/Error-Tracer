@@ -180,6 +180,10 @@ request returns HTTP `202 Accepted`:
 is limited to 1 MiB. Every event is normalized and validated before SQLite is
 modified; all UPSERTs then run in one transaction.
 
+Rate limiting is charged per event, not per HTTP request. Set
+`ERROR_TRACER_RATE_BURST` to at least the largest batch size clients are allowed
+to submit; a batch whose event count exceeds the configured burst is rejected.
+
 ```json
 {
   "project_key": "replace-with-the-ingest-key",

@@ -147,6 +147,12 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
+	// The wrapper has already charged one token so malformed and unauthorized
+	// requests are bounded too. Charge the remainder atomically once the batch
+	// size is trusted.
+	if !s.allowIngestTokens(w, request, len(payload.Events)-1) {
+		return
+	}
 
 	captured := make([]event.Event, len(payload.Events))
 	for index, item := range payload.Events {
