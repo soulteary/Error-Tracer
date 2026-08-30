@@ -55,6 +55,19 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	}
 }
 
+func TestDatabasePathFromEnvironmentDoesNotRequireCredentials(t *testing.T) {
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", " /var/lib/error-tracer/maintenance.db ")
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "")
+	if got := DatabasePathFromEnvironment(); got != "/var/lib/error-tracer/maintenance.db" {
+		t.Fatalf("DatabasePathFromEnvironment() = %q", got)
+	}
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", "")
+	if got := DatabasePathFromEnvironment(); got != "error-tracer.db" {
+		t.Fatalf("default DatabasePathFromEnvironment() = %q", got)
+	}
+}
+
 func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_ADDRESS", " 127.0.0.1:9090 ")
 	t.Setenv("ERROR_TRACER_DATABASE_PATH", " /var/lib/error-tracer/events.db ")

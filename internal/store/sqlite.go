@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -59,7 +61,12 @@ ON CONFLICT (project_id, fingerprint) DO UPDATE SET
     last_seen = MAX(issues.last_seen, excluded.last_seen)
 `
 
-var ErrDatabasePathRequired = errors.New("database path is required")
+var (
+	ErrDatabasePathRequired = errors.New("database path is required")
+	ErrBackupPathRequired   = errors.New("backup path is required")
+	ErrBackupExists         = errors.New("backup path already exists")
+	ErrIntegrityCheckFailed = errors.New("SQLite integrity check failed")
+)
 
 var (
 	ErrInvalidSQLiteConnectionCount = errors.New("SQLite connection count must be between 1 and 32")
@@ -81,6 +88,26 @@ type SQLite struct {
 // OpenSQLite opens a SQLite database and applies its idempotent schema.
 func OpenSQLite(ctx context.Context, path string) (*SQLite, error) {
 	return OpenSQLiteWithOptions(ctx, path, SQLiteOptions{MaxOpenConnections: 1})
+}
+
+// OpenSQLiteReadOnly opens an existing database without applying migrations or
+// changing its journal mode. It is intended for integrity checks and backups.
+func OpenSQLiteReadOnly(ctx context.Context, path string) (*SQLite, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, ErrDatabasePathRequired
+	}
+	database, err := sql.Open("sqlite", sqliteReadOnlyDataSourceName(path))
+	if err != nil {
+		return nil, fmt.Errorf("open read-only sqlite database: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	if err := database.PingContext(ctx); err != nil {
+		_ = database.Close()
+		return nil, fmt.Errorf("ping read-only sqlite database: %w", err)
+	}
+	return &SQLite{db: database}, nil
 }
 
 // OpenSQLiteWithOptions opens a SQLite database with an explicitly bounded
@@ -147,6 +174,23 @@ func sqliteDataSourceName(path string, connections int) string {
 	return path + separator + parameters
 }
 
+func sqliteReadOnlyDataSourceName(path string) string {
+	pathPart, rawQuery, hasQuery := strings.Cut(path, "?")
+	if !strings.HasPrefix(strings.ToLower(pathPart), "file:") {
+		pathPart = (&url.URL{Scheme: "file", Path: pathPart}).String()
+	}
+	query := make(url.Values)
+	if hasQuery {
+		if parsed, err := url.ParseQuery(rawQuery); err == nil {
+			query = parsed
+		}
+	}
+	query.Set("mode", "ro")
+	query.Set("_busy_timeout", "5000")
+	query.Set("_foreign_keys", "on")
+	return pathPart + "?" + query.Encode()
+}
+
 func isMemorySQLitePath(path string) bool {
 	lower := strings.ToLower(path)
 	if lower == ":memory:" || strings.HasPrefix(lower, "file::memory:") {
@@ -166,6 +210,107 @@ func (s *SQLite) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// Ready verifies that the connection pool can execute a lightweight read.
+func (s *SQLite) Ready(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("SQLite database is unavailable")
+	}
+	var value int
+	if err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&value); err != nil {
+		return fmt.Errorf("probe sqlite database: %w", err)
+	}
+	if value != 1 {
+		return fmt.Errorf("probe sqlite database: returned %d, want 1", value)
+	}
+	return nil
+}
+
+// IntegrityCheck runs SQLite's bounded quick integrity check.
+func (s *SQLite) IntegrityCheck(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return errors.New("SQLite database is unavailable")
+	}
+	rows, err := s.db.QueryContext(ctx, "PRAGMA quick_check")
+	if err != nil {
+		return fmt.Errorf("run SQLite integrity check: %w", err)
+	}
+	defer rows.Close()
+
+	checked := false
+	problems := make([]string, 0)
+	for rows.Next() {
+		checked = true
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return fmt.Errorf("read SQLite integrity result: %w", err)
+		}
+		result = strings.TrimSpace(result)
+		if !strings.EqualFold(result, "ok") {
+			problems = append(problems, result)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate SQLite integrity results: %w", err)
+	}
+	if !checked {
+		return fmt.Errorf("%w: no result", ErrIntegrityCheckFailed)
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("%w: %s", ErrIntegrityCheckFailed, strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// Backup creates a consistent snapshot and atomically publishes it at
+// destination without replacing an existing filesystem entry.
+func (s *SQLite) Backup(ctx context.Context, destination string) error {
+	destination = strings.TrimSpace(destination)
+	if destination == "" {
+		return ErrBackupPathRequired
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return ErrBackupExists
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect backup destination: %w", err)
+	}
+
+	temporary, err := os.CreateTemp(
+		filepath.Dir(destination), "."+filepath.Base(destination)+"-*.tmp",
+	)
+	if err != nil {
+		return fmt.Errorf("create temporary backup: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(temporaryPath)
+		return fmt.Errorf("close temporary backup: %w", err)
+	}
+	defer func() { _ = os.Remove(temporaryPath) }()
+
+	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", temporaryPath); err != nil {
+		return fmt.Errorf("create SQLite snapshot: %w", err)
+	}
+	backup, err := OpenSQLiteReadOnly(ctx, temporaryPath)
+	if err != nil {
+		return fmt.Errorf("open SQLite snapshot: %w", err)
+	}
+	checkErr := backup.IntegrityCheck(ctx)
+	closeErr := backup.Close()
+	if checkErr != nil {
+		return fmt.Errorf("verify SQLite snapshot: %w", checkErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close SQLite snapshot: %w", closeErr)
+	}
+	if err := os.Link(temporaryPath, destination); err != nil {
+		if _, statErr := os.Lstat(destination); statErr == nil {
+			return ErrBackupExists
+		}
+		return fmt.Errorf("publish SQLite snapshot: %w", err)
+	}
+	return nil
 }
 
 // Record atomically adds an event to its fingerprint group.
@@ -395,8 +540,9 @@ UPDATE issues SET status = ? WHERE project_id = ? AND fingerprint = ?
 	return issue, nil
 }
 
-// PruneIssues atomically removes issues in one project that have not been seen
-// since the cutoff. SQLite can reuse the released pages for future writes.
+// PruneIssues atomically removes at most PruneBatchSize issues in one project
+// that have not been seen since the cutoff. SQLite can reuse the released pages
+// for future writes.
 func (s *SQLite) PruneIssues(ctx context.Context, projectID string, cutoff time.Time) (int64, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
@@ -411,9 +557,15 @@ func (s *SQLite) PruneIssues(ctx context.Context, projectID string, cutoff time.
 
 	result, err := s.db.ExecContext(
 		ctx,
-		"DELETE FROM issues WHERE project_id = ? AND last_seen < ?",
+		`DELETE FROM issues WHERE rowid IN (
+    SELECT rowid FROM issues
+    WHERE project_id = ? AND last_seen < ?
+    ORDER BY last_seen ASC
+    LIMIT ?
+)`,
 		projectID,
 		cutoff.UnixNano(),
+		PruneBatchSize,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("prune issues: %w", err)

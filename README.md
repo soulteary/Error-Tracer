@@ -237,7 +237,7 @@ embedded dashboard uses cursor pagination.
 | `GET` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Read an issue |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
 | `GET` | `/healthz` | None | Process liveness |
-| `GET` | `/readyz` | None | Readiness for new work |
+| `GET` | `/readyz` | None | Readiness for new work, including a live SQLite read |
 | `GET` | `/metrics` | None, when enabled | Low-cardinality Prometheus metrics |
 
 ## Configuration
@@ -263,10 +263,11 @@ An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
 
 When retention is enabled, Error-Tracer removes expired issues at startup and
-then every 24 hours. Cleanup is scoped to the configured project and uses
-`last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
-pages for later writes. Run an offline `VACUUM` only when the database file
-must be physically compacted immediately.
+then every 24 hours. Cleanup is scoped to the configured project, uses
+`last_seen`, and commits at most 500 deletions per transaction; an issue seen
+exactly at the cutoff is kept. SQLite reuses deleted pages for later writes.
+Run an offline `VACUUM` only when the database file must be physically
+compacted immediately.
 
 ### SQLite concurrency and backups
 
@@ -278,6 +279,23 @@ rollback-journal behavior; in-memory databases require that setting. WAL creates
 `-wal` and `-shm` sidecars, so use SQLite-aware backups or stop the service before
 copying database files. Keep the database on a local filesystem with reliable
 locking rather than a network filesystem that cannot safely support WAL.
+
+The readiness endpoint performs a bounded live read and returns `503` when the
+store is unavailable. The Prometheus output reports both the combined
+`error_tracer_ready` state and the latest `error_tracer_store_ready` result.
+Use the built-in maintenance commands for a full quick integrity check or a
+consistent online snapshot:
+
+```sh
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db error-tracer db check
+ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db \
+  error-tracer db backup /backups/error-tracer.db
+```
+
+These commands do not require ingestion or administration credentials. They
+open the source database read-only. Backup includes committed WAL data, checks
+the new snapshot before publishing it, and refuses to replace an existing
+destination.
 
 ### Rotate the admin token without an access gap
 

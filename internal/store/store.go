@@ -11,6 +11,9 @@ import (
 )
 
 const (
+	// PruneBatchSize bounds each retention delete transaction.
+	PruneBatchSize = 500
+
 	defaultPageSize = 50
 	maxPageSize     = 100
 )

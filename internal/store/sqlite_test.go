@@ -455,6 +455,85 @@ func TestSQLitePruneIssuesIsProjectScopedAndUsesLastSeen(t *testing.T) {
 	}
 }
 
+func TestSQLitePruneIssuesBoundsEachDelete(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	captured := make([]event.Event, PruneBatchSize+3)
+	for index := range captured {
+		captured[index] = testEvent(time.Date(2026, time.January, 1, 0, 0, index, 0, time.UTC))
+		captured[index].Message = fmt.Sprintf("expired-%d", index)
+	}
+	if _, err := database.RecordBatch(context.Background(), "project-a", captured); err != nil {
+		t.Fatalf("record expired issues: %v", err)
+	}
+
+	cutoff := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
+	deleted, err := database.PruneIssues(context.Background(), "project-a", cutoff)
+	if err != nil {
+		t.Fatalf("first PruneIssues() error = %v", err)
+	}
+	if deleted != PruneBatchSize {
+		t.Fatalf("first PruneIssues() deleted = %d, want %d", deleted, PruneBatchSize)
+	}
+	deleted, err = database.PruneIssues(context.Background(), "project-a", cutoff)
+	if err != nil {
+		t.Fatalf("second PruneIssues() error = %v", err)
+	}
+	if deleted != 3 {
+		t.Fatalf("second PruneIssues() deleted = %d, want 3", deleted)
+	}
+}
+
+func TestSQLiteReadOnlyMaintenanceAndAtomicBackup(t *testing.T) {
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "source #1.db")
+	backupPath := filepath.Join(directory, "backup.db")
+	database, err := OpenSQLiteWithOptions(
+		context.Background(), sourcePath, SQLiteOptions{MaxOpenConnections: 4},
+	)
+	if err != nil {
+		t.Fatalf("open source SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	stored, err := database.Record(context.Background(), "project-a", testEvent(time.Now().UTC()))
+	if err != nil {
+		t.Fatalf("record source issue: %v", err)
+	}
+	if err := database.Ready(context.Background()); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if err := database.IntegrityCheck(context.Background()); err != nil {
+		t.Fatalf("IntegrityCheck() error = %v", err)
+	}
+	if err := database.Backup(context.Background(), backupPath); err != nil {
+		t.Fatalf("Backup() error = %v", err)
+	}
+	if err := database.Backup(context.Background(), backupPath); !errors.Is(err, ErrBackupExists) {
+		t.Fatalf("existing Backup() error = %v, want ErrBackupExists", err)
+	}
+	if matches, err := filepath.Glob(filepath.Join(directory, ".backup.db-*.tmp")); err != nil || len(matches) != 0 {
+		t.Fatalf("temporary backups = %v, error = %v", matches, err)
+	}
+
+	backup, err := OpenSQLiteReadOnly(context.Background(), backupPath)
+	if err != nil {
+		t.Fatalf("open backup read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = backup.Close() })
+	if err := backup.IntegrityCheck(context.Background()); err != nil {
+		t.Fatalf("backup IntegrityCheck() error = %v", err)
+	}
+	if _, err := backup.GetIssue(context.Background(), "project-a", stored.Fingerprint); err != nil {
+		t.Fatalf("read issue from backup: %v", err)
+	}
+	if _, err := OpenSQLiteReadOnly(context.Background(), filepath.Join(directory, "missing.db")); err == nil {
+		t.Fatal("OpenSQLiteReadOnly() error = nil for a missing database")
+	}
+	if err := database.Backup(context.Background(), " "); !errors.Is(err, ErrBackupPathRequired) {
+		t.Fatalf("empty Backup() error = %v, want ErrBackupPathRequired", err)
+	}
+}
+
 func openTestSQLite(t *testing.T, path string) *SQLite {
 	t.Helper()
 	database, err := OpenSQLite(context.Background(), path)

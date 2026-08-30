@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 type Server struct {
 	handler        http.Handler
 	ready          atomic.Bool
+	storeReady     atomic.Bool
 	store          store.Store
 	demoStore      store.Store
 	demoOnly       bool
@@ -24,6 +27,12 @@ type Server struct {
 	metrics        *serviceMetrics
 	now            func() time.Time
 	newID          func() (string, error)
+}
+
+const readinessTimeout = time.Second
+
+type readinessChecker interface {
+	Ready(context.Context) error
 }
 
 // Options provides the dependencies required by the HTTP service.
@@ -99,6 +108,7 @@ func New(options Options) *Server {
 		ready = server.demoStore != nil
 	}
 	server.ready.Store(ready)
+	server.storeReady.Store(ready)
 	return server
 }
 
@@ -116,12 +126,33 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, http.StatusOK, "ok")
 }
 
-func (s *Server) readiness(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) readiness(w http.ResponseWriter, request *http.Request) {
 	if !s.ready.Load() {
 		writeStatus(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
+	if !s.demoOnly {
+		if checker, ok := s.store.(readinessChecker); ok {
+			ctx, cancel := context.WithTimeout(request.Context(), readinessTimeout)
+			err := checker.Ready(ctx)
+			cancel()
+			if err != nil {
+				if s.storeReady.Swap(false) {
+					slog.Warn("issue store became unavailable", "error", err)
+				}
+				writeStatus(w, http.StatusServiceUnavailable, "unavailable")
+				return
+			}
+			if !s.storeReady.Swap(true) {
+				slog.Info("issue store recovered")
+			}
+		}
+	}
 	writeStatus(w, http.StatusOK, "ready")
+}
+
+func (s *Server) effectiveReady() bool {
+	return s.ready.Load() && s.storeReady.Load()
 }
 
 func writeStatus(w http.ResponseWriter, statusCode int, status string) {
