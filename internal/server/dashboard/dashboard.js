@@ -15,11 +15,11 @@
       "login.title": "See the failures your users cannot explain.",
       "login.body": "Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.",
       "login.tokenLabel": "Admin token",
-      "login.tokenPlaceholder": "Paste a token containing at least 24 bytes",
+      "login.tokenPlaceholder": "Paste at least 24 visible ASCII characters",
       "login.connect": "Connect",
       "login.demo": "Explore the read-only demo",
       "login.noCredentials": "No credentials are stored by the dashboard.",
-      "login.tokenTooShort": "The admin token must contain at least 24 UTF-8 bytes.",
+      "login.tokenInvalid": "The admin token must contain at least 24 visible ASCII characters.",
       "login.connecting": "Connecting…",
       "login.loadingDemo": "Loading the read-only demo…",
       "login.disconnected": "Disconnected. Paste the admin token to reconnect.",
@@ -103,11 +103,11 @@
       "login.title": "看见用户难以描述的故障。",
       "login.body": "使用当前 Error-Tracer 实例配置的管理员令牌连接。令牌只保存在此标签页的内存中，绝不会持久化。",
       "login.tokenLabel": "管理员令牌",
-      "login.tokenPlaceholder": "粘贴至少包含 24 字节的令牌",
+      "login.tokenPlaceholder": "粘贴至少 24 个非空白可见 ASCII 字符",
       "login.connect": "连接",
       "login.demo": "查看只读演示",
       "login.noCredentials": "Dashboard 不会保存任何凭据。",
-      "login.tokenTooShort": "管理员令牌必须至少包含 24 个 UTF-8 字节。",
+      "login.tokenInvalid": "管理员令牌必须至少包含 24 个非空白可见 ASCII 字符。",
       "login.connecting": "正在连接…",
       "login.loadingDemo": "正在加载只读演示…",
       "login.disconnected": "已断开。粘贴管理员令牌可重新连接。",
@@ -249,8 +249,8 @@
   elements.tokenForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const token = elements.tokenInput.value.trim();
-    if (utf8Length(token) < 24) {
-      showMessage(elements.loginMessage, message("login.tokenTooShort"), true);
+    if (!isHeaderSafeToken(token)) {
+      showMessage(elements.loginMessage, message("login.tokenInvalid"), true);
       return;
     }
     const session = beginSession();
@@ -761,13 +761,18 @@
     return ["open", "resolved", "ignored"].includes(status) ? status : "open";
   }
 
-  function utf8Length(value) {
-    let bytes = 0;
-    for (const character of String(value || "")) {
-      const point = character.codePointAt(0);
-      bytes += point <= 0x7f ? 1 : point <= 0x7ff ? 2 : point <= 0xffff ? 3 : 4;
+  function isHeaderSafeToken(value) {
+    value = String(value || "");
+    if (value.length < 24) {
+      return false;
     }
-    return bytes;
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index);
+      if (code < 0x21 || code > 0x7e) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function statusLabel(status) {

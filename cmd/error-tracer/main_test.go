@@ -3,12 +3,43 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
+	appserver "github.com/soulteary/Error-Tracer/internal/server"
 	"github.com/soulteary/Error-Tracer/internal/store"
 )
+
+func TestServeWaitsForShutdownAfterListenFailure(t *testing.T) {
+	app := appserver.New(appserver.Options{DemoOnly: true})
+	stoppedAfterCancel := false
+	code := serve(
+		app,
+		"127.0.0.1:-1",
+		time.Second,
+		func(ctx context.Context) func() {
+			return func() {
+				stoppedAfterCancel = ctx.Err() != nil
+			}
+		},
+		true,
+	)
+	if code != 1 {
+		t.Fatalf("serve() = %d, want 1", code)
+	}
+	if !stoppedAfterCancel {
+		t.Fatal("background work stopped before the shutdown context was canceled")
+	}
+
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("readiness status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+}
 
 type fakeHTTPServer struct {
 	shutdownErr error

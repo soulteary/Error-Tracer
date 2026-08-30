@@ -282,11 +282,11 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_ADDRESS` | No | `:8080` | HTTP listen address |
 | `ERROR_TRACER_DATABASE_PATH` | No | `error-tracer.db` | SQLite database path |
 | `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | No | `4` | SQLite pool size, from 1 to 32 |
-| `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | No | `100` | Newest event rows retained per issue, from 1 to 1,000 |
+| `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | No | `100` | Newest event rows retained per issue, from 1 to 1,000; lowering it trims existing history at startup |
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
-| `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
-| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token accepted temporarily during rotation |
+| `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 visible ASCII characters |
+| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token in the same visible-ASCII format, accepted temporarily during rotation |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
@@ -297,6 +297,10 @@ history rows in the same transaction that records new events.
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
+
+Admin tokens are carried in the HTTP `Authorization` header, so non-ASCII,
+whitespace, and control characters are rejected consistently by the service
+and dashboard.
 
 When retention is enabled, Error-Tracer removes expired issues at startup and
 then every 24 hours. Cleanup is scoped to the configured project, uses
@@ -317,18 +321,22 @@ rollback-journal behavior; in-memory databases require that setting. WAL creates
 copying database files. Keep the database on a local filesystem with reliable
 locking rather than a network filesystem that cannot safely support WAL.
 
-The service records an ordered SQLite schema version and applies each pending
-migration in its own transaction at startup. Existing unversioned databases are
-adopted without discarding their issue rows. Back up the database before running
-a newer Error-Tracer release; a build refuses to open a database whose schema is
-newer than it supports.
+The service records an ordered SQLite schema version. At startup, an immediate
+write transaction serializes the version check and every pending migration, so
+concurrent processes cannot apply the same DDL. Existing unversioned databases
+are adopted without discarding their issue rows. Back up the database before
+running a newer Error-Tracer release; a build refuses to open a database whose
+schema is newer than it supports.
 
 Upgrading an existing aggregate-only database creates an empty occurrence
 history. New events are retained after the upgrade; past events cannot be
-reconstructed from the aggregate row.
+reconstructed from the aggregate row. Startup also reconciles every existing
+history with `ERROR_TRACER_MAX_EVENTS_PER_ISSUE`; trimming retained payloads does
+not change the issue's lifetime occurrence count.
 
-The readiness endpoint performs a bounded live read and returns `503` when the
-store is unavailable. The Prometheus output reports both the combined
+The readiness endpoint performs a bounded live read of SQLite's required schema
+and returns `503` when the store or an operational table is unavailable. The
+Prometheus output reports both the combined
 `error_tracer_ready` state and the latest `error_tracer_store_ready` result.
 Use the built-in maintenance commands for a full quick integrity check or a
 consistent online snapshot:

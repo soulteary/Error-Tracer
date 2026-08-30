@@ -209,6 +209,8 @@ func serve(
 	)
 	if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("server stopped unexpectedly", "error", err)
+		stop()
+		<-shutdownDone
 		return 1
 	}
 	<-shutdownDone

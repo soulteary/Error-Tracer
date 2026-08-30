@@ -55,7 +55,8 @@ func TestDashboardClientGuardsAsyncState(t *testing.T) {
 	}
 	client := response.Body.String()
 	for _, marker := range []string{
-		"if (utf8Length(token) < 24)",
+		"if (!isHeaderSafeToken(token))",
+		"code < 0x21 || code > 0x7e",
 		"const session = beginSession();",
 		"request !== state.detailRequest",
 		"setStatusButtonsBusy(state.statusUpdating)",
