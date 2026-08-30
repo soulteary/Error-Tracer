@@ -22,6 +22,17 @@ test("validates client options", () => {
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, beforeSend: true }), /beforeSend/);
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, transport: true }), /transport/);
   assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, autoCapture: "yes" }), /autoCapture/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, batchSize: 0 }), /batchSize/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, batchSize: 101 }), /batchSize/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, flushInterval: -1 }), /flushInterval/);
+  assert.throws(() => ErrorTracer.init({
+    projectKey: PROJECT_KEY, batchSize: 10, maxQueueSize: 9,
+  }), /maxQueueSize/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, maxRetries: 6 }), /maxRetries/);
+  assert.throws(() => ErrorTracer.init({ projectKey: PROJECT_KEY, maxBatchBytes: 1023 }), /maxBatchBytes/);
+  assert.throws(() => ErrorTracer.init({
+    projectKey: PROJECT_KEY, maxBatchBytes: (900 * 1024) + 1,
+  }), /maxBatchBytes/);
 
   assert.ok(ErrorTracer.init({
     projectKey: "界".repeat(6),
@@ -48,6 +59,7 @@ test("captures and normalizes an exception", async () => {
     tags: { region: " ap-southeast-1 " },
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
     transport(nextBody, nextPayload) {
       body = nextBody;
       payload = nextPayload;
@@ -67,7 +79,7 @@ test("captures and normalizes an exception", async () => {
   assert.equal(accepted, true);
   assert.deepEqual(JSON.parse(body), payload);
   assert.equal(payload.project_key, PROJECT_KEY);
-  assert.deepEqual(payload.event, {
+  assert.deepEqual(payload.events, [{
     kind: "error",
     message: "boom",
     stack: "Error: boom\n    at checkout (app.js:10:5)",
@@ -82,7 +94,7 @@ test("captures and normalizes an exception", async () => {
       region: "ap-southeast-1",
       operation: "checkout",
     },
-  });
+  }]);
 });
 
 test("captures messages and bounds UTF-8 fields", async () => {
@@ -94,7 +106,7 @@ test("captures messages and bounds UTF-8 fields", async () => {
       Array.from({ length: 40 }, (_, index) => [`tag-${index}`, "界".repeat(100)]),
     ),
     transport(_body, payload) {
-      events.push(payload.event);
+      events.push(payload.events[0]);
       return true;
     },
   });
@@ -122,7 +134,7 @@ test("beforeSend can modify or drop an event", async () => {
       return event;
     },
     transport(_body, payload) {
-      events.push(payload.event);
+      events.push(payload.events[0]);
       return true;
     },
   });
@@ -194,12 +206,13 @@ test("default transport prefers sendBeacon with a simple text body", async () =>
     endpoint: "https://errors.example/api/v1/events",
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
   });
 
   assert.equal(await client.captureMessage("boom"), true);
-  assert.equal(beacon.endpoint, "https://errors.example/api/v1/events");
+  assert.equal(beacon.endpoint, "https://errors.example/api/v1/events/batch");
   assert.equal(beacon.blob.type, "text/plain;charset=UTF-8");
-  assert.equal(JSON.parse(beacon.blob.parts[0]).event.message, "boom");
+  assert.equal(JSON.parse(beacon.blob.parts[0]).events[0].message, "boom");
   assert.equal(fetchCalled, false);
 });
 
@@ -223,15 +236,16 @@ test("default transport falls back to credential-free fetch", async () => {
     runtime,
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
   });
 
   assert.equal(await client.captureMessage("boom"), true);
-  assert.equal(request.endpoint, "/api/v1/events");
+  assert.equal(request.endpoint, "/api/v1/events/batch");
   assert.equal(request.options.method, "POST");
   assert.deepEqual(request.options.headers, { "Content-Type": "application/json" });
   assert.equal(request.options.credentials, "omit");
   assert.equal(request.options.keepalive, true);
-  assert.equal(JSON.parse(request.options.body).event.message, "boom");
+  assert.equal(JSON.parse(request.options.body).events[0].message, "boom");
 });
 
 test("capture contains extension and transport failures", async () => {
@@ -272,8 +286,9 @@ test("automatically captures runtime, resource, and rejection failures", async (
     runtime,
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
     transport(_body, payload) {
-      events.push(payload.event);
+      events.push(payload.events[0]);
       return true;
     },
   });
@@ -329,12 +344,14 @@ test("automatic capture can be installed and destroyed idempotently", () => {
   assert.equal(client.install(), false);
   assert.equal(runtime.listenerCount("error"), 1);
   assert.equal(runtime.listenerCount("unhandledrejection"), 1);
+  assert.equal(runtime.listenerCount("pagehide"), 1);
 
   client.destroy();
   client.destroy();
   assert.equal(client.installed, false);
   assert.equal(runtime.listenerCount("error"), 0);
   assert.equal(runtime.listenerCount("unhandledrejection"), 0);
+  assert.equal(runtime.listenerCount("pagehide"), 0);
 });
 
 test("serializes plain-object rejection reasons", async () => {
@@ -345,8 +362,9 @@ test("serializes plain-object rejection reasons", async () => {
     runtime,
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
     transport(_body, payload) {
-      events.push(payload.event);
+      events.push(payload.events[0]);
       return true;
     },
   });
@@ -361,12 +379,168 @@ test("serializes plain-object rejection reasons", async () => {
   assert.equal(events[0].message, '{"code":"E_CHECKOUT","retryable":false}');
 });
 
+test("queues events and sends an atomic batch", async () => {
+  const payloads = [];
+  const client = testClient({
+    batchSize: 2,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("one"), true);
+  assert.deepEqual(client.getStats(), {
+    queued: 1, sent: 0, dropped: 0, failed: 0, batches: 0, retries: 0,
+  });
+  assert.equal(await client.captureMessage("two"), true);
+  assert.equal(payloads.length, 1);
+  assert.deepEqual(payloads[0].events.map((item) => item.message), ["one", "two"]);
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 2, dropped: 0, failed: 0, batches: 1, retries: 0,
+  });
+});
+
+test("splits a queue before the configured request-size limit", async () => {
+  const payloads = [];
+  const client = testClient({
+    batchSize: 10,
+    flushInterval: 0,
+    maxBatchBytes: 1024,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("a".repeat(700)), true);
+  assert.equal(await client.captureMessage("b".repeat(700)), true);
+  assert.equal(await client.flush(), true);
+  assert.equal(payloads.length, 2);
+  assert.deepEqual(payloads.map((payload) => payload.events.length), [1, 1]);
+});
+
+test("flushes a partial queue after the configured interval", async () => {
+  let scheduled;
+  const payloads = [];
+  const runtime = {
+    location: { href: "https://app.example/page" },
+    setTimeout(callback, delay) {
+      scheduled = { callback, delay };
+      return 1;
+    },
+    clearTimeout() {},
+  };
+  const client = testClient({
+    runtime,
+    batchSize: 10,
+    flushInterval: 75,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("scheduled"), true);
+  assert.equal(scheduled.delay, 75);
+  scheduled.callback();
+  await eventLoopTurn();
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].events[0].message, "scheduled");
+});
+
+test("bounds the queue while another batch is in flight", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 1,
+    maxQueueSize: 2,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  assert.equal(await client.captureMessage("three"), true);
+  assert.equal(await client.captureMessage("four"), true);
+  assert.equal(client.getStats().dropped, 1);
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  await eventLoopTurn();
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "three", "four"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 3, dropped: 1, failed: 0, batches: 3, retries: 0,
+  });
+});
+
+test("retries failed batches with a finite budget", async () => {
+  let attempts = 0;
+  const runtime = {
+    location: { href: "https://app.example/page" },
+    setTimeout(callback) {
+      callback();
+      return 1;
+    },
+    clearTimeout() {},
+  };
+  const client = testClient({
+    runtime,
+    batchSize: 1,
+    maxRetries: 2,
+    retryBaseDelay: 1,
+    transport() {
+      attempts++;
+      return false;
+    },
+  });
+
+  assert.equal(await client.captureMessage("offline"), false);
+  assert.equal(attempts, 3);
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 2,
+  });
+});
+
+test("pagehide flushes a partial queue", async () => {
+  const payloads = [];
+  const runtime = fakeRuntime();
+  const client = testClient({
+    runtime,
+    batchSize: 10,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("leaving"), true);
+  assert.equal(payloads.length, 0);
+  runtime.dispatch("pagehide", {});
+  await eventLoopTurn();
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].events[0].message, "leaving");
+});
+
 function testClient(overrides) {
   return ErrorTracer.init({
     projectKey: PROJECT_KEY,
     runtime: { location: { href: "https://app.example/page" } },
     random: () => 0,
     clock: () => FIXED_TIME,
+    batchSize: 1,
     transport() {
       return true;
     },

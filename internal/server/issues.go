@@ -20,6 +20,8 @@ const (
 	maxIssueUpdateBodySize = 4 * 1024
 	issueCursorVersion     = 1
 	issueCursorSize        = 1 + 8 + 32
+	eventCursorVersion     = 1
+	eventCursorSize        = 1 + 8 + 8
 )
 
 type issueResponse struct {
@@ -28,6 +30,11 @@ type issueResponse struct {
 
 type issuePageResponse struct {
 	store.IssuePage
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+type eventPageResponse struct {
+	store.EventPage
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
@@ -77,6 +84,32 @@ func (s *Server) getIssue(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, issueResponse{Issue: issue})
+}
+
+func (s *Server) listIssueEvents(w http.ResponseWriter, request *http.Request) {
+	if !s.authorizeAdmin(w, request) {
+		return
+	}
+	fingerprint := request.PathValue("fingerprint")
+	if !validFingerprint(fingerprint) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_fingerprint"})
+		return
+	}
+	options, err := parseEventListOptions(request)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_pagination"})
+		return
+	}
+	page, err := s.store.ListIssueEvents(request.Context(), s.projectID, fingerprint, options)
+	if errors.Is(err, store.ErrIssueNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "issue_not_found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeEventPage(w, page)
 }
 
 func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
@@ -184,10 +217,40 @@ func parseListOptions(request *http.Request) (store.ListOptions, error) {
 	return options, nil
 }
 
+func parseEventListOptions(request *http.Request) (store.EventListOptions, error) {
+	query := request.URL.Query()
+	if len(query["limit"]) > 1 || len(query["cursor"]) > 1 {
+		return store.EventListOptions{}, errors.New("pagination parameters must not be repeated")
+	}
+	var options store.EventListOptions
+	if raw := query.Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			return store.EventListOptions{}, errors.New("limit must be between 1 and 100")
+		}
+		options.Limit = limit
+	}
+	if raw := query.Get("cursor"); raw != "" {
+		cursor, err := decodeEventCursor(raw)
+		if err != nil {
+			return store.EventListOptions{}, err
+		}
+		options.After = &cursor
+	}
+	return options, nil
+}
+
 func writeIssuePage(w http.ResponseWriter, page store.IssuePage) {
 	writeJSON(w, http.StatusOK, issuePageResponse{
 		IssuePage:  page,
 		NextCursor: encodeIssueCursor(page.Next),
+	})
+}
+
+func writeEventPage(w http.ResponseWriter, page store.EventPage) {
+	writeJSON(w, http.StatusOK, eventPageResponse{
+		EventPage:  page,
+		NextCursor: encodeEventCursor(page.Next),
 	})
 }
 
@@ -214,6 +277,32 @@ func decodeIssueCursor(value string) (store.ListCursor, error) {
 	return store.ListCursor{
 		LastSeen:    time.Unix(0, int64(binary.BigEndian.Uint64(decoded[1:9]))).UTC(),
 		Fingerprint: hex.EncodeToString(decoded[9:]),
+	}, nil
+}
+
+func encodeEventCursor(cursor *store.EventCursor) string {
+	if cursor == nil || cursor.Sequence < 1 {
+		return ""
+	}
+	encoded := make([]byte, eventCursorSize)
+	encoded[0] = eventCursorVersion
+	binary.BigEndian.PutUint64(encoded[1:9], uint64(cursor.ReceivedAt.UnixNano()))
+	binary.BigEndian.PutUint64(encoded[9:17], uint64(cursor.Sequence))
+	return base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func decodeEventCursor(value string) (store.EventCursor, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(decoded) != eventCursorSize || decoded[0] != eventCursorVersion {
+		return store.EventCursor{}, errors.New("invalid event cursor")
+	}
+	sequence := int64(binary.BigEndian.Uint64(decoded[9:17]))
+	if sequence < 1 {
+		return store.EventCursor{}, errors.New("invalid event cursor")
+	}
+	return store.EventCursor{
+		ReceivedAt: time.Unix(0, int64(binary.BigEndian.Uint64(decoded[1:9]))).UTC(),
+		Sequence:   sequence,
 	}, nil
 }
 

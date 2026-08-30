@@ -52,7 +52,10 @@ func run() int {
 	issueStore, err := store.OpenSQLiteWithOptions(
 		context.Background(),
 		cfg.DatabasePath,
-		store.SQLiteOptions{MaxOpenConnections: cfg.SQLiteMaxOpenConnections},
+		store.SQLiteOptions{
+			MaxOpenConnections: cfg.SQLiteMaxOpenConnections,
+			MaxEventsPerIssue:  cfg.MaxEventsPerIssue,
+		},
 	)
 	if err != nil {
 		slog.Error("open issue database", "error", err)

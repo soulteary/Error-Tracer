@@ -60,6 +60,20 @@
       if (options.autoCapture !== undefined && typeof options.autoCapture !== "boolean") {
         throw new TypeError("ErrorTracer autoCapture must be a boolean");
       }
+      this.batchSize = integerOption(options.batchSize, 10, 1, 100, "batchSize");
+      this.flushInterval = integerOption(
+        options.flushInterval, 1000, 0, 60_000, "flushInterval",
+      );
+      this.maxQueueSize = integerOption(
+        options.maxQueueSize, 100, this.batchSize, 1000, "maxQueueSize",
+      );
+      this.maxRetries = integerOption(options.maxRetries, 2, 0, 5, "maxRetries");
+      this.retryBaseDelay = integerOption(
+        options.retryBaseDelay, 250, 1, 10_000, "retryBaseDelay",
+      );
+      this.maxBatchBytes = integerOption(
+        options.maxBatchBytes, 512 * 1024, 1024, 900 * 1024, "maxBatchBytes",
+      );
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);
       this.environment = truncateUTF8(cleanString(options.environment), LIMITS.environment);
@@ -68,10 +82,28 @@
       this.random = typeof options.random === "function" ? options.random : Math.random;
       this.clock = typeof options.clock === "function" ? options.clock : () => new Date();
       this.sentAt = [];
-      this.transport = options.transport || defaultTransport(this.runtime, this.endpoint);
+      this.batchEndpoint = cleanString(
+        options.batchEndpoint || defaultBatchEndpoint(this.endpoint),
+      );
+      if (!this.batchEndpoint) {
+        throw new TypeError("ErrorTracer batchEndpoint is required");
+      }
+      this.transport = options.transport ||
+        defaultTransport(this.runtime, this.batchEndpoint);
+      this.queue = [];
+      this.flushTimer = null;
+      this.flushPromise = null;
+      this.stats = {
+        sent: 0,
+        dropped: 0,
+        failed: 0,
+        batches: 0,
+        retries: 0,
+      };
       this.installed = false;
       this.errorListener = (event) => this.captureWindowError(event);
       this.rejectionListener = (event) => this.captureUnhandledRejection(event);
+      this.pagehideListener = () => this.settle(this.flush());
       if (options.autoCapture !== false) {
         this.install();
       }
@@ -87,18 +119,20 @@
       }
       this.runtime.addEventListener("error", this.errorListener, true);
       this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
+      this.runtime.addEventListener("pagehide", this.pagehideListener, false);
       this.installed = true;
       return true;
     }
 
     destroy() {
-      if (!this.installed) {
-        return;
-      }
-      if (this.runtime && typeof this.runtime.removeEventListener === "function") {
+      if (this.installed && this.runtime &&
+          typeof this.runtime.removeEventListener === "function") {
         this.runtime.removeEventListener("error", this.errorListener, true);
         this.runtime.removeEventListener("unhandledrejection", this.rejectionListener, false);
+        this.runtime.removeEventListener("pagehide", this.pagehideListener, false);
       }
+      this.clearFlushTimer();
+      this.settle(this.flush());
       this.installed = false;
     }
 
@@ -230,15 +264,15 @@
       }
       captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
 
-      const payload = { project_key: this.projectKey, event: captured };
-      const body = JSON.stringify(payload);
-      try {
-        return Promise.resolve(this.transport(body, payload))
-          .then((result) => result !== false)
-          .catch(() => false);
-      } catch (_) {
-        return Promise.resolve(false);
+      this.enqueue(captured);
+      if (this.queue.length >= this.batchSize) {
+        if (this.flushPromise) {
+          return Promise.resolve(true);
+        }
+        return this.flush();
       }
+      this.scheduleFlush();
+      return Promise.resolve(true);
     }
 
     normalize(candidate) {
@@ -295,6 +329,166 @@
       this.sentAt.push(now);
       return true;
     }
+
+    enqueue(captured) {
+      if (this.queue.length >= this.maxQueueSize) {
+        this.queue.shift();
+        this.stats.dropped++;
+      }
+      this.queue.push(cloneEvent(captured));
+    }
+
+    flush() {
+      if (this.flushPromise) {
+        return this.flushPromise;
+      }
+      this.clearFlushTimer();
+      if (!this.queue.length) {
+        return Promise.resolve(true);
+      }
+      const pending = this.queue.splice(0);
+      this.flushPromise = this.sendPending(pending).finally(() => {
+        this.flushPromise = null;
+        if (this.queue.length >= this.batchSize) {
+          this.settle(this.flush());
+        } else {
+          this.scheduleFlush();
+        }
+      });
+      return this.flushPromise;
+    }
+
+    sendPending(pending) {
+      const batches = this.makeBatches(pending);
+      return batches.reduce(
+        (result, events) => result.then((accepted) =>
+          this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted)),
+        Promise.resolve(true),
+      );
+    }
+
+    makeBatches(pending) {
+      const batches = [];
+      let current = [];
+      for (const captured of pending) {
+        const candidate = current.concat([captured]);
+        const candidateBody = JSON.stringify({
+          project_key: this.projectKey,
+          events: candidate,
+        });
+        if (current.length && utf8Length(candidateBody) > this.maxBatchBytes) {
+          batches.push(current);
+          current = [captured];
+        } else {
+          current = candidate;
+        }
+        if (current.length >= this.batchSize) {
+          batches.push(current);
+          current = [];
+        }
+      }
+      if (current.length) {
+        batches.push(current);
+      }
+      return batches;
+    }
+
+    sendBatch(events, attempt) {
+      const payload = { project_key: this.projectKey, events };
+      const body = JSON.stringify(payload);
+      let result;
+      try {
+        result = Promise.resolve(this.transport(body, payload));
+      } catch (_) {
+        result = Promise.reject(new Error("transport failed"));
+      }
+      return result.then(
+        (accepted) => accepted === false
+          ? this.retryBatch(events, attempt)
+          : this.acceptBatch(events),
+        () => this.retryBatch(events, attempt),
+      );
+    }
+
+    acceptBatch(events) {
+      this.stats.sent += events.length;
+      this.stats.batches++;
+      return true;
+    }
+
+    retryBatch(events, attempt) {
+      if (attempt < this.maxRetries) {
+        this.stats.retries++;
+        const delay = this.retryBaseDelay * (2 ** attempt);
+        return this.wait(delay).then(() => this.sendBatch(events, attempt + 1));
+      }
+      this.stats.failed += events.length;
+      this.stats.dropped += events.length;
+      return false;
+    }
+
+    wait(delay) {
+      const setTimer = safeRead(this.runtime, "setTimeout");
+      if (typeof setTimer !== "function") {
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        setTimer.call(this.runtime, resolve, delay);
+      });
+    }
+
+    scheduleFlush() {
+      if (this.flushTimer !== null || !this.queue.length || this.flushInterval === 0) {
+        return;
+      }
+      const setTimer = safeRead(this.runtime, "setTimeout");
+      if (typeof setTimer !== "function") {
+        return;
+      }
+      this.flushTimer = setTimer.call(this.runtime, () => {
+        this.flushTimer = null;
+        this.settle(this.flush());
+      }, this.flushInterval);
+      if (this.flushTimer && typeof this.flushTimer.unref === "function") {
+        this.flushTimer.unref();
+      }
+    }
+
+    clearFlushTimer() {
+      if (this.flushTimer === null) {
+        return;
+      }
+      const clearTimer = safeRead(this.runtime, "clearTimeout");
+      if (typeof clearTimer === "function") {
+        clearTimer.call(this.runtime, this.flushTimer);
+      }
+      this.flushTimer = null;
+    }
+
+    getStats() {
+      return Object.freeze({
+        queued: this.queue.length,
+        sent: this.stats.sent,
+        dropped: this.stats.dropped,
+        failed: this.stats.failed,
+        batches: this.stats.batches,
+        retries: this.stats.retries,
+      });
+    }
+  }
+
+  function defaultBatchEndpoint(endpoint) {
+    const suffixIndex = endpoint.search(/[?#]/);
+    const path = suffixIndex < 0 ? endpoint : endpoint.slice(0, suffixIndex);
+    const parameters = suffixIndex < 0 ? "" : endpoint.slice(suffixIndex);
+    const suffix = "/api/v1/events";
+    if (path.endsWith(suffix + "/batch")) {
+      return path + parameters;
+    }
+    if (path.endsWith(suffix)) {
+      return path + "/batch" + parameters;
+    }
+    return path.replace(/\/$/, "") + "/batch" + parameters;
   }
 
   function defaultTransport(runtime, endpoint) {
@@ -325,6 +519,16 @@
         keepalive: true,
       }).then((response) => Boolean(response && response.ok));
     };
+  }
+
+  function integerOption(value, fallback, minimum, maximum, name) {
+    value = value === undefined ? fallback : Number(value);
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+      throw new TypeError(
+        `ErrorTracer ${name} must be an integer between ${minimum} and ${maximum}`,
+      );
+    }
+    return value;
   }
 
   function errorDetails(error) {

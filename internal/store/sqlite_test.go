@@ -52,6 +52,111 @@ func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
+	ctx := context.Background()
+	newPath := filepath.Join(t.TempDir(), "new.db")
+	created := openTestSQLite(t, newPath)
+	var version int
+	if err := created.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read new database schema version: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("new database schema version = %d, want 2", version)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatalf("close new database: %v", err)
+	}
+
+	existingPath := filepath.Join(t.TempDir(), "existing.db")
+	existing, err := sql.Open("sqlite", existingPath)
+	if err != nil {
+		t.Fatalf("open existing database: %v", err)
+	}
+	if _, err := existing.Exec(sqliteInitialSchema); err != nil {
+		t.Fatalf("create unversioned schema: %v", err)
+	}
+	if _, err := existing.Exec(`
+		INSERT INTO issues (
+			project_id, fingerprint, kind, message, source_url, line, column_number,
+			status, occurrences, first_seen, last_seen, last_event
+		) VALUES ('project-a', 'fingerprint', 'error', 'preserved', '', 0, 0,
+			'open', 1, 1, 1, '{}')
+	`); err != nil {
+		t.Fatalf("seed unversioned database: %v", err)
+	}
+	if err := existing.Close(); err != nil {
+		t.Fatalf("close unversioned database: %v", err)
+	}
+
+	migrated := openTestSQLite(t, existingPath)
+	t.Cleanup(func() { _ = migrated.Close() })
+	if err := migrated.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != 2 {
+		t.Fatalf("migrated schema version = %d, want 2", version)
+	}
+	var message string
+	if err := migrated.db.QueryRowContext(
+		ctx, "SELECT message FROM issues WHERE project_id = 'project-a'",
+	).Scan(&message); err != nil {
+		t.Fatalf("read preserved row: %v", err)
+	}
+	if message != "preserved" {
+		t.Fatalf("preserved message = %q, want preserved", message)
+	}
+}
+
+func TestSQLiteMigrationRejectsNewerSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "newer.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if _, err := database.Exec("PRAGMA user_version = 99"); err != nil {
+		t.Fatalf("set newer schema version: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	if _, err := OpenSQLite(context.Background(), path); !errors.Is(err, ErrSQLiteSchemaTooNew) {
+		t.Fatalf("open newer schema error = %v, want ErrSQLiteSchemaTooNew", err)
+	}
+}
+
+func TestSQLiteMigrationRollsBackFailedVersion(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	migrations := []sqliteMigration{{
+		version: 1,
+		name:    "broken migration",
+		schema:  "CREATE TABLE partial (id INTEGER); INVALID SQL;",
+	}}
+	if err := migrateSQLite(context.Background(), database, migrations); err == nil {
+		t.Fatal("failed migration error = nil")
+	}
+	var version int
+	if err := database.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if version != 0 {
+		t.Fatalf("schema version = %d, want 0", version)
+	}
+	var count int
+	if err := database.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'partial'",
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect partial table: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("partial table count = %d, want 0", count)
+	}
+}
+
 func TestSQLiteRecordBatchUsesOneAtomicTransaction(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -101,6 +206,30 @@ END;
 		context.Background(), "project-a", nil,
 	); !errors.Is(err, ErrEventsRequired) {
 		t.Fatalf("empty batch error = %v, want ErrEventsRequired", err)
+	}
+
+	if _, err := database.db.Exec(`
+	CREATE TRIGGER reject_event_history
+	BEFORE INSERT ON events
+	WHEN NEW.event_id = 'reject-history'
+	BEGIN
+	    SELECT RAISE(ABORT, 'rejected event history');
+	END;
+	`); err != nil {
+		t.Fatalf("create event-history rejection trigger: %v", err)
+	}
+	historyRejected := testEvent(base.Add(4 * time.Minute))
+	historyRejected.ID = "reject-history"
+	historyRejected.Message = "history transaction rollback"
+	if _, err := database.Record(
+		context.Background(), "project-a", historyRejected,
+	); err == nil {
+		t.Fatal("record rejected history error = nil")
+	}
+	if _, err := database.GetIssue(
+		context.Background(), "project-a", historyRejected.Fingerprint(),
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("issue from failed history insert error = %v, want ErrIssueNotFound", err)
 	}
 }
 
@@ -231,6 +360,65 @@ func TestSQLiteListIssuesFiltersByStatus(t *testing.T) {
 	}
 }
 
+func TestSQLiteListIssueEventsIsBoundedProjectScopedAndCursorPaginated(t *testing.T) {
+	database, err := OpenSQLiteWithOptions(
+		context.Background(), ":memory:",
+		SQLiteOptions{MaxOpenConnections: 1, MaxEventsPerIssue: 3},
+	)
+	if err != nil {
+		t.Fatalf("open SQLite: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+	events := historyEvents(base, 5, "bounded history")
+	events[3].ReceivedAt = events[4].ReceivedAt
+	for _, captured := range events {
+		if _, err := database.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record project-a history: %v", err)
+		}
+	}
+	other := events[0]
+	other.ID = "other-project"
+	if _, err := database.Record(context.Background(), "project-b", other); err != nil {
+		t.Fatalf("record project-b history: %v", err)
+	}
+
+	first, err := database.ListIssueEvents(
+		context.Background(), "project-a", events[0].Fingerprint(), EventListOptions{Limit: 2},
+	)
+	if err != nil {
+		t.Fatalf("list first history page: %v", err)
+	}
+	if first.Total != 3 || len(first.Events) != 2 || first.Next == nil {
+		t.Fatalf("first history page = %#v, want two of three retained events", first)
+	}
+	if first.Events[0].ID != "event-04" || first.Events[1].ID != "event-03" {
+		t.Fatalf("first history IDs = %q, %q", first.Events[0].ID, first.Events[1].ID)
+	}
+	second, err := database.ListIssueEvents(
+		context.Background(), "project-a", events[0].Fingerprint(),
+		EventListOptions{Limit: 2, After: first.Next},
+	)
+	if err != nil {
+		t.Fatalf("list second history page: %v", err)
+	}
+	if len(second.Events) != 1 || second.Events[0].ID != "event-02" || second.Next != nil {
+		t.Fatalf("second history page = %#v, want final retained event", second)
+	}
+	issue, err := database.GetIssue(context.Background(), "project-a", events[0].Fingerprint())
+	if err != nil {
+		t.Fatalf("get aggregate: %v", err)
+	}
+	if issue.Occurrences != 5 {
+		t.Fatalf("aggregate occurrences = %d, want lifetime count 5", issue.Occurrences)
+	}
+	if _, err := database.ListIssueEvents(
+		context.Background(), "project-a", "missing", EventListOptions{},
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("missing issue history error = %v, want ErrIssueNotFound", err)
+	}
+}
+
 func TestSQLiteRecordSerializesConcurrentWriters(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -350,6 +538,12 @@ func TestSQLiteRejectsInvalidInputAndMapsMissingIssue(t *testing.T) {
 	); !errors.Is(err, ErrInvalidSQLiteConnectionCount) {
 		t.Fatalf("connection count error = %v, want ErrInvalidSQLiteConnectionCount", err)
 	}
+	if _, err := OpenSQLiteWithOptions(
+		context.Background(), "ignored.db",
+		SQLiteOptions{MaxOpenConnections: 1, MaxEventsPerIssue: MaxEventsPerIssue + 1},
+	); !errors.Is(err, ErrInvalidEventHistoryLimit) {
+		t.Fatalf("event history limit error = %v, want ErrInvalidEventHistoryLimit", err)
+	}
 
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -410,6 +604,54 @@ func TestSQLiteSetIssueStatusPersists(t *testing.T) {
 	}
 }
 
+func TestSQLiteRecordReopensResolvedIssueAndPreservesIgnoredIssue(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+
+	resolvedEvent := testEvent(base)
+	resolvedEvent.Message = "resolved regression"
+	resolved, err := database.Record(context.Background(), "project-a", resolvedEvent)
+	if err != nil {
+		t.Fatalf("record resolved issue: %v", err)
+	}
+	if _, err := database.SetIssueStatus(
+		context.Background(), "project-a", resolved.Fingerprint, IssueStatusResolved,
+	); err != nil {
+		t.Fatalf("resolve issue: %v", err)
+	}
+	reopened, err := database.Record(
+		context.Background(), "project-a", testEventWithMessage(base.Add(time.Minute), resolvedEvent.Message),
+	)
+	if err != nil {
+		t.Fatalf("record regression: %v", err)
+	}
+	if reopened.Status != IssueStatusOpen || reopened.Occurrences != 2 {
+		t.Fatalf("reopened issue = %#v, want open with two occurrences", reopened)
+	}
+
+	ignoredEvent := testEvent(base)
+	ignoredEvent.Message = "ignored noise"
+	ignored, err := database.Record(context.Background(), "project-a", ignoredEvent)
+	if err != nil {
+		t.Fatalf("record ignored issue: %v", err)
+	}
+	if _, err := database.SetIssueStatus(
+		context.Background(), "project-a", ignored.Fingerprint, IssueStatusIgnored,
+	); err != nil {
+		t.Fatalf("ignore issue: %v", err)
+	}
+	stillIgnored, err := database.Record(
+		context.Background(), "project-a", testEventWithMessage(base.Add(time.Minute), ignoredEvent.Message),
+	)
+	if err != nil {
+		t.Fatalf("record ignored recurrence: %v", err)
+	}
+	if stillIgnored.Status != IssueStatusIgnored || stillIgnored.Occurrences != 2 {
+		t.Fatalf("ignored issue = %#v, want ignored with two occurrences", stillIgnored)
+	}
+}
+
 func TestSQLitePruneIssuesIsProjectScopedAndUsesLastSeen(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
@@ -439,6 +681,16 @@ func TestSQLitePruneIssuesIsProjectScopedAndUsesLastSeen(t *testing.T) {
 	}
 	if _, err := database.GetIssue(context.Background(), "project-a", old.Fingerprint()); !errors.Is(err, ErrIssueNotFound) {
 		t.Fatalf("expired issue error = %v, want ErrIssueNotFound", err)
+	}
+	var oldEvents int
+	if err := database.db.QueryRow(
+		"SELECT COUNT(*) FROM events WHERE project_id = ? AND fingerprint = ?",
+		"project-a", old.Fingerprint(),
+	).Scan(&oldEvents); err != nil {
+		t.Fatalf("count expired event history: %v", err)
+	}
+	if oldEvents != 0 {
+		t.Fatalf("expired event history rows = %d, want 0", oldEvents)
 	}
 	if _, err := database.GetIssue(context.Background(), "project-a", current.Fingerprint()); err != nil {
 		t.Fatalf("issue at cutoff was deleted: %v", err)

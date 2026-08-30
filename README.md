@@ -3,8 +3,9 @@
 [简体中文](README.zh-CN.md)
 
 Error-Tracer is a small, self-hosted browser error collector. The current
-service is written in Go, stores aggregated issues in SQLite, ships a
-dependency-free browser SDK, and includes an embedded triage dashboard.
+service is written in Go, stores aggregated issues and bounded occurrence
+history in SQLite, ships a dependency-free browser SDK, and includes an
+embedded triage dashboard.
 
 The original 2013 PHP/MySQL implementation is preserved in the
 [`v1.0.0-legacy`](https://github.com/soulteary/Error-Tracer/tree/v1.0.0-legacy)
@@ -17,9 +18,12 @@ tag. It is not part of the current runtime.
   persistence.
 - Groups matching events with a stable SHA-256 fingerprint.
 - Persists issue aggregates in SQLite.
+- Retains the newest events for each issue with stable cursor pagination.
 - Writes batches of up to 100 events in one transaction and rolls the entire
   batch back on failure.
 - Tracks `open`, `resolved`, and `ignored` issue states.
+- Reopens a resolved issue when its fingerprint occurs again, while ignored
+  issues remain ignored.
 - Provides an authenticated JSON API and an embedded dashboard.
 - Offers English and Simplified Chinese dashboard locales without browser
   storage.
@@ -109,8 +113,22 @@ The service exposes its embedded SDK at `/assets/error-tracer.js`:
 ```
 
 Automatic capture is enabled by default. Set `autoCapture: false` when only
-manual capture is wanted. The client also supports `sampleRate`,
-`maxEventsPerMinute`, `beforeSend`, and a custom `transport`.
+manual capture is wanted. Events are queued in memory and sent to the atomic
+batch endpoint when 10 events have accumulated, after 1 second, or when the
+page is hidden. The queue retains at most 100 events and failed batches are
+retried twice with exponential backoff. These bounds can be changed with
+`batchSize`, `flushInterval`, `maxQueueSize`, `maxRetries`,
+`retryBaseDelay`, and `maxBatchBytes`.
+
+Call `await tracer.flush()` before a controlled shutdown when delivery should
+be observed, and use `tracer.getStats()` to inspect queued, sent, retried,
+failed, and dropped counts. A successful `captureMessage` or
+`captureException` means that a partial batch was accepted into the local
+queue; `flush()` reports whether every batch in that flush was accepted by the
+transport. The client also supports `sampleRate`, `maxEventsPerMinute`,
+`beforeSend`, `batchEndpoint`, and a custom batch `transport`. Use
+`beforeSend` to remove application-specific sensitive values before an event
+enters the queue.
 
 ## Ingestion API
 
@@ -206,6 +224,7 @@ Authorization: Bearer replace-with-the-admin-token
 | `GET` | `/api/v1/issues?limit=50&cursor=...` | Continue from `next_cursor` |
 | `GET` | `/api/v1/issues?status=open` | Filter by `open`, `resolved`, or `ignored` |
 | `GET` | `/api/v1/issues/{fingerprint}` | Read one issue |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | Read retained occurrences, newest first |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Change the issue status |
 
 Status update body:
@@ -216,11 +235,19 @@ Status update body:
 }
 ```
 
+A new occurrence automatically moves a `resolved` issue back to `open`.
+`ignored` issues remain ignored when they recur.
+
 Pages are limited to 100 issues. When another page exists, the response includes
 an opaque `next_cursor`; pass it back with the same `limit` and `status` filter.
 Cursor and offset cannot be combined. The legacy `offset` parameter remains
 available for compatibility, but offsets above 100,000 are rejected. The
 embedded dashboard uses cursor pagination.
+
+Occurrence-history pages also accept `limit` and `cursor`. Their `total`
+is the number of retained events, while the issue's `occurrences` field remains
+the lifetime aggregate count. The configured per-issue limit discards the oldest
+history rows in the same transaction that records new events.
 
 ## Service endpoints
 
@@ -231,10 +258,12 @@ embedded dashboard uses cursor pagination.
 | `GET` | `/api/v1/meta` | None | Public demo availability and demo-only mode flags |
 | `GET` | `/api/v1/demo/issues` | None, demo mode only | List built-in read-only demo issues |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | None, demo mode only | Read one built-in demo issue |
+| `GET` | `/api/v1/demo/issues/{fingerprint}/events` | None, demo mode only | Read built-in occurrence history |
 | `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |
 | `POST` | `/api/v1/events/batch` | Ingest key in the body | Submit an atomic batch |
 | `GET` | `/api/v1/issues` | Admin bearer token | List issues |
 | `GET` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Read an issue |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | Admin bearer token | Read retained occurrences |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
 | `GET` | `/healthz` | None | Process liveness |
 | `GET` | `/readyz` | None | Readiness for new work, including a live SQLite read |
@@ -247,6 +276,7 @@ embedded dashboard uses cursor pagination.
 | `ERROR_TRACER_ADDRESS` | No | `:8080` | HTTP listen address |
 | `ERROR_TRACER_DATABASE_PATH` | No | `error-tracer.db` | SQLite database path |
 | `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | No | `4` | SQLite pool size, from 1 to 32 |
+| `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | No | `100` | Newest event rows retained per issue, from 1 to 1,000 |
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
 | `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
@@ -267,7 +297,8 @@ then every 24 hours. Cleanup is scoped to the configured project, uses
 `last_seen`, and commits at most 500 deletions per transaction; an issue seen
 exactly at the cutoff is kept. SQLite reuses deleted pages for later writes.
 Run an offline `VACUUM` only when the database file must be physically
-compacted immediately.
+compacted immediately. Deleting an expired issue also deletes its retained
+event rows.
 
 ### SQLite concurrency and backups
 
@@ -279,6 +310,16 @@ rollback-journal behavior; in-memory databases require that setting. WAL creates
 `-wal` and `-shm` sidecars, so use SQLite-aware backups or stop the service before
 copying database files. Keep the database on a local filesystem with reliable
 locking rather than a network filesystem that cannot safely support WAL.
+
+The service records an ordered SQLite schema version and applies each pending
+migration in its own transaction at startup. Existing unversioned databases are
+adopted without discarding their issue rows. Back up the database before running
+a newer Error-Tracer release; a build refuses to open a database whose schema is
+newer than it supports.
+
+Upgrading an existing aggregate-only database creates an empty occurrence
+history. New events are retained after the upgrade; past events cannot be
+reconstructed from the aggregate row.
 
 The readiness endpoint performs a bounded live read and returns `503` when the
 store is unavailable. The Prometheus output reports both the combined
@@ -321,6 +362,7 @@ go vet ./...
 go test ./...
 go test -race ./...
 npm test
+npm run check:docs
 ```
 
 Performance and capacity checks are opt-in. See

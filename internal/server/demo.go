@@ -79,6 +79,35 @@ func (s *Server) getDemoIssue(w http.ResponseWriter, request *http.Request) {
 	writeJSON(w, http.StatusOK, issueResponse{Issue: issue})
 }
 
+func (s *Server) listDemoIssueEvents(w http.ResponseWriter, request *http.Request) {
+	if s.demoStore == nil {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "demo_unavailable"})
+		return
+	}
+	fingerprint := request.PathValue("fingerprint")
+	if !validFingerprint(fingerprint) {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_fingerprint"})
+		return
+	}
+	options, err := parseEventListOptions(request)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "invalid_pagination"})
+		return
+	}
+	page, err := s.demoStore.ListIssueEvents(
+		request.Context(), demoProjectID, fingerprint, options,
+	)
+	if errors.Is(err, store.ErrIssueNotFound) {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "issue_not_found"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
+	writeEventPage(w, page)
+}
+
 func newDemoStore(now time.Time) store.Store {
 	memory := store.NewMemory()
 	if err := seedDemoStore(memory, now); err != nil {
