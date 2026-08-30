@@ -372,6 +372,27 @@ test("capture rejects a non-string JSON serialization result", async () => {
   assert.equal(transports, 0);
 });
 
+test("capture rejects serialized bodies without the expected envelope", async () => {
+  const original = JSON.stringify;
+  const results = [];
+  let transports = 0;
+  try {
+    for (const serialized of ["null", "{}", '{"project_key":"wrong","events":[]}']) {
+      JSON.stringify = () => serialized;
+      results.push(await testClient({
+        transport() {
+          transports++;
+          return true;
+        },
+      }).captureMessage("boom"));
+    }
+  } finally {
+    JSON.stringify = original;
+  }
+  assert.deepEqual(results, [false, false, false]);
+  assert.equal(transports, 0);
+});
+
 test("batch serialization ignores inherited toJSON hooks", async () => {
   const original = Object.prototype.toJSON;
   const bodies = [];

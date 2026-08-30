@@ -22,6 +22,7 @@
   });
   const KEEPALIVE_BODY_LIMIT = 60 * 1024;
   const EVENT_KINDS = new Set(["error", "unhandled_rejection", "resource_error"]);
+  const parseJSON = JSON.parse;
 
   class Client {
     constructor(options) {
@@ -753,10 +754,36 @@
       envelope.project_key = projectKey;
       envelope.events = serializedEvents;
       const serialized = JSON.stringify(envelope);
-      return typeof serialized === "string" ? serialized : null;
+      if (typeof serialized !== "string") {
+        return null;
+      }
+      return sameJSONValue(parseJSON(serialized), envelope) ? serialized : null;
     } catch (_) {
       return null;
     }
+  }
+
+  function sameJSONValue(actual, expected) {
+    if (actual === expected) {
+      return true;
+    }
+    if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object") {
+      return false;
+    }
+    if (Array.isArray(actual) !== Array.isArray(expected)) {
+      return false;
+    }
+    const actualKeys = Object.keys(actual);
+    const expectedKeys = Object.keys(expected);
+    if (actualKeys.length !== expectedKeys.length) {
+      return false;
+    }
+    for (const key of expectedKeys) {
+      if (!actualKeys.includes(key) || !sameJSONValue(actual[key], expected[key])) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function safeRead(value, property) {
