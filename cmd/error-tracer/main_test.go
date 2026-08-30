@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/soulteary/Error-Tracer/internal/store"
 )
 
 type fakeHTTPServer struct {
@@ -16,14 +19,18 @@ type fakeHTTPServer struct {
 type fakeIssuePruner struct {
 	projectID string
 	cutoff    time.Time
-	deleted   int64
+	remaining int64
+	calls     int
 	err       error
 }
 
 func (p *fakeIssuePruner) PruneIssues(_ context.Context, projectID string, cutoff time.Time) (int64, error) {
 	p.projectID = projectID
 	p.cutoff = cutoff
-	return p.deleted, p.err
+	p.calls++
+	deleted := min(p.remaining, int64(store.PruneBatchSize))
+	p.remaining -= deleted
+	return deleted, p.err
 }
 
 func (s *fakeHTTPServer) Shutdown(context.Context) error {
@@ -68,7 +75,7 @@ func TestStopHTTPServerReportsCloseFailure(t *testing.T) {
 
 func TestPruneExpiredIssuesUsesConfiguredWindow(t *testing.T) {
 	now := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.FixedZone("test", 9*60*60))
-	pruner := &fakeIssuePruner{deleted: 7}
+	pruner := &fakeIssuePruner{remaining: 7}
 	deleted, err := pruneExpiredIssues(context.Background(), pruner, "project-a", 30, now)
 	if err != nil {
 		t.Fatalf("pruneExpiredIssues() error = %v", err)
@@ -79,6 +86,48 @@ func TestPruneExpiredIssuesUsesConfiguredWindow(t *testing.T) {
 	wantCutoff := now.UTC().Add(-30 * 24 * time.Hour)
 	if !pruner.cutoff.Equal(wantCutoff) {
 		t.Fatalf("cutoff = %s, want %s", pruner.cutoff, wantCutoff)
+	}
+}
+
+func TestPruneExpiredIssuesRepeatsBoundedDeletes(t *testing.T) {
+	pruner := &fakeIssuePruner{remaining: int64(store.PruneBatchSize*2 + 3)}
+	deleted, err := pruneExpiredIssues(
+		context.Background(), pruner, "project-a", 30, time.Now(),
+	)
+	if err != nil {
+		t.Fatalf("pruneExpiredIssues() error = %v", err)
+	}
+	if deleted != int64(store.PruneBatchSize*2+3) || pruner.calls != 3 {
+		t.Fatalf("deleted = %d, calls = %d, want %d in 3 calls", deleted, pruner.calls, store.PruneBatchSize*2+3)
+	}
+}
+
+func TestDatabaseMaintenanceCommands(t *testing.T) {
+	directory := t.TempDir()
+	source := filepath.Join(directory, "source.db")
+	backup := filepath.Join(directory, "backup.db")
+	database, err := store.OpenSQLite(context.Background(), source)
+	if err != nil {
+		t.Fatalf("create source database: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close source database: %v", err)
+	}
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", source)
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "")
+
+	if code := runDatabaseCommand([]string{"check"}); code != 0 {
+		t.Fatalf("db check exit code = %d, want 0", code)
+	}
+	if code := runDatabaseCommand([]string{"backup", backup}); code != 0 {
+		t.Fatalf("db backup exit code = %d, want 0", code)
+	}
+	if code := runDatabaseCommand([]string{"backup", backup}); code != 1 {
+		t.Fatalf("existing backup exit code = %d, want 1", code)
+	}
+	if code := runDatabaseCommand([]string{"unknown"}); code != 2 {
+		t.Fatalf("invalid command exit code = %d, want 2", code)
 	}
 }
 

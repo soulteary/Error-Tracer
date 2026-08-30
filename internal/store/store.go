@@ -11,17 +11,23 @@ import (
 )
 
 const (
-	defaultPageSize = 50
-	maxPageSize     = 100
+	// PruneBatchSize bounds each retention delete transaction.
+	PruneBatchSize = 500
+
+	defaultPageSize          = 50
+	maxPageSize              = 100
+	DefaultMaxEventsPerIssue = 100
+	MaxEventsPerIssue        = 1000
 )
 
 var (
-	ErrIssueNotFound   = errors.New("issue not found")
-	ErrInvalidStatus   = errors.New("invalid issue status")
-	ErrProjectRequired = errors.New("project ID is required")
-	ErrEventsRequired  = errors.New("at least one event is required")
-	ErrReceivedAtEmpty = errors.New("event received_at is required")
-	ErrCutoffRequired  = errors.New("retention cutoff is required")
+	ErrIssueNotFound            = errors.New("issue not found")
+	ErrInvalidStatus            = errors.New("invalid issue status")
+	ErrProjectRequired          = errors.New("project ID is required")
+	ErrEventsRequired           = errors.New("at least one event is required")
+	ErrReceivedAtEmpty          = errors.New("event received_at is required")
+	ErrCutoffRequired           = errors.New("retention cutoff is required")
+	ErrInvalidEventHistoryLimit = errors.New("event history limit must be between 1 and 1000")
 )
 
 // IssueStatus describes the triage state of an aggregated issue.
@@ -82,12 +88,33 @@ type IssuePage struct {
 	Next   *ListCursor `json:"-"`
 }
 
+// EventListOptions controls bounded occurrence-history pagination.
+type EventListOptions struct {
+	Limit int
+	After *EventCursor
+}
+
+// EventCursor identifies the last stored occurrence returned by a page.
+type EventCursor struct {
+	ReceivedAt time.Time
+	Sequence   int64
+}
+
+// EventPage is a stable page of retained events for one issue.
+type EventPage struct {
+	Events []event.Event `json:"events"`
+	Total  int           `json:"total"`
+	Limit  int           `json:"limit"`
+	Next   *EventCursor  `json:"-"`
+}
+
 // Store records events and exposes their aggregated issues.
 type Store interface {
 	Record(context.Context, string, event.Event) (Issue, error)
 	RecordBatch(context.Context, string, []event.Event) ([]Issue, error)
 	GetIssue(context.Context, string, string) (Issue, error)
 	ListIssues(context.Context, string, ListOptions) (IssuePage, error)
+	ListIssueEvents(context.Context, string, string, EventListOptions) (EventPage, error)
 	SetIssueStatus(context.Context, string, string, IssueStatus) (Issue, error)
 }
 
@@ -103,6 +130,16 @@ func normalizeListOptions(options ListOptions) ListOptions {
 	}
 	if options.After != nil {
 		options.Offset = 0
+	}
+	return options
+}
+
+func normalizeEventListOptions(options EventListOptions) EventListOptions {
+	if options.Limit <= 0 {
+		options.Limit = defaultPageSize
+	}
+	if options.Limit > maxPageSize {
+		options.Limit = maxPageSize
 	}
 	return options
 }

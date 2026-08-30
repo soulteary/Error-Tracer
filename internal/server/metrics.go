@@ -100,10 +100,12 @@ func (s *Server) prometheusMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(s.metrics.render(s.ready.Load(), s.demoStore != nil)))
+	_, _ = w.Write([]byte(s.metrics.render(
+		s.effectiveReady(), s.storeReady.Load(), s.demoStore != nil,
+	)))
 }
 
-func (m *serviceMetrics) render(ready, demo bool) string {
+func (m *serviceMetrics) render(ready, storeReady, demo bool) string {
 	m.mu.Lock()
 	requests := make(map[requestMetricKey]uint64, len(m.requests))
 	for key, value := range m.requests {
@@ -190,6 +192,9 @@ func (m *serviceMetrics) render(ready, demo bool) string {
 	output.WriteString("# HELP error_tracer_ready Whether the service is ready to accept work.\n")
 	output.WriteString("# TYPE error_tracer_ready gauge\n")
 	fmt.Fprintf(&output, "error_tracer_ready %d\n", boolMetric(ready))
+	output.WriteString("# HELP error_tracer_store_ready Whether the issue store passed its latest readiness probe.\n")
+	output.WriteString("# TYPE error_tracer_store_ready gauge\n")
+	fmt.Fprintf(&output, "error_tracer_store_ready %d\n", boolMetric(storeReady))
 	output.WriteString("# HELP error_tracer_demo_enabled Whether the public read-only demo is enabled.\n")
 	output.WriteString("# TYPE error_tracer_demo_enabled gauge\n")
 	fmt.Fprintf(&output, "error_tracer_demo_enabled %d\n", boolMetric(demo))

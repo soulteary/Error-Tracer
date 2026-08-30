@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -13,6 +15,7 @@ import (
 type Server struct {
 	handler        http.Handler
 	ready          atomic.Bool
+	storeReady     atomic.Bool
 	store          store.Store
 	demoStore      store.Store
 	demoOnly       bool
@@ -24,6 +27,12 @@ type Server struct {
 	metrics        *serviceMetrics
 	now            func() time.Time
 	newID          func() (string, error)
+}
+
+const readinessTimeout = time.Second
+
+type readinessChecker interface {
+	Ready(context.Context) error
 }
 
 // Options provides the dependencies required by the HTTP service.
@@ -80,6 +89,7 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /assets/error-tracer.js", server.browserSDK)
 	mux.HandleFunc("GET /api/v1/meta", server.publicMetadata)
 	mux.HandleFunc("GET /api/v1/demo/issues", server.listDemoIssues)
+	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}/events", server.listDemoIssueEvents)
 	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}", server.getDemoIssue)
 	if !options.DemoOnly {
 		mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
@@ -87,6 +97,7 @@ func New(options Options) *Server {
 		mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
 		mux.HandleFunc("OPTIONS /api/v1/events/batch", server.preflightEvent)
 		mux.HandleFunc("GET /api/v1/issues", server.listIssues)
+		mux.HandleFunc("GET /api/v1/issues/{fingerprint}/events", server.listIssueEvents)
 		mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
 		mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
 	}
@@ -99,6 +110,7 @@ func New(options Options) *Server {
 		ready = server.demoStore != nil
 	}
 	server.ready.Store(ready)
+	server.storeReady.Store(ready)
 	return server
 }
 
@@ -116,12 +128,33 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeStatus(w, http.StatusOK, "ok")
 }
 
-func (s *Server) readiness(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) readiness(w http.ResponseWriter, request *http.Request) {
 	if !s.ready.Load() {
 		writeStatus(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
+	if !s.demoOnly {
+		if checker, ok := s.store.(readinessChecker); ok {
+			ctx, cancel := context.WithTimeout(request.Context(), readinessTimeout)
+			err := checker.Ready(ctx)
+			cancel()
+			if err != nil {
+				if s.storeReady.Swap(false) {
+					slog.Warn("issue store became unavailable", "error", err)
+				}
+				writeStatus(w, http.StatusServiceUnavailable, "unavailable")
+				return
+			}
+			if !s.storeReady.Swap(true) {
+				slog.Info("issue store recovered")
+			}
+		}
+	}
 	writeStatus(w, http.StatusOK, "ready")
+}
+
+func (s *Server) effectiveReady() bool {
+	return s.ready.Load() && s.storeReady.Load()
 }
 
 func writeStatus(w http.ResponseWriter, statusCode int, status string) {

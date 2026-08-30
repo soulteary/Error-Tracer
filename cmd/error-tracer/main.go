@@ -25,9 +25,12 @@ func main() {
 }
 
 func run() int {
-	if len(os.Args) == 2 {
+	if len(os.Args) >= 2 {
 		switch os.Args[1] {
 		case "healthcheck":
+			if len(os.Args) != 2 {
+				break
+			}
 			address := os.Getenv("ERROR_TRACER_ADDRESS")
 			if err := healthcheck.Check(context.Background(), address); err != nil {
 				slog.Error("health check failed", "error", err)
@@ -35,8 +38,16 @@ func run() int {
 			}
 			return 0
 		case "demo":
+			if len(os.Args) != 2 {
+				break
+			}
 			return runDemo()
+		case "db":
+			return runDatabaseCommand(os.Args[2:])
 		case "version":
+			if len(os.Args) != 2 {
+				break
+			}
 			fmt.Println(buildinfo.Summary())
 			return 0
 		}
@@ -50,7 +61,10 @@ func run() int {
 	issueStore, err := store.OpenSQLiteWithOptions(
 		context.Background(),
 		cfg.DatabasePath,
-		store.SQLiteOptions{MaxOpenConnections: cfg.SQLiteMaxOpenConnections},
+		store.SQLiteOptions{
+			MaxOpenConnections: cfg.SQLiteMaxOpenConnections,
+			MaxEventsPerIssue:  cfg.MaxEventsPerIssue,
+		},
 	)
 	if err != nil {
 		slog.Error("open issue database", "error", err)
@@ -78,6 +92,50 @@ func run() int {
 	return serve(app, cfg.Address, cfg.ShutdownTimeout, func(ctx context.Context) func() {
 		return startRetention(ctx, issueStore, cfg.ProjectID, cfg.RetentionDays)
 	}, false)
+}
+
+func runDatabaseCommand(arguments []string) int {
+	operation := ""
+	destination := ""
+	switch {
+	case len(arguments) == 1 && arguments[0] == "check":
+		operation = "check"
+	case len(arguments) == 2 && arguments[0] == "backup" && strings.TrimSpace(arguments[1]) != "":
+		operation = "backup"
+		destination = arguments[1]
+	default:
+		slog.Error("usage: error-tracer db check | error-tracer db backup <destination>")
+		return 2
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	databasePath := config.DatabasePathFromEnvironment()
+	database, err := store.OpenSQLiteReadOnly(ctx, databasePath)
+	if err != nil {
+		slog.Error("open database for maintenance", "error", err)
+		return 1
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			slog.Error("close maintenance database", "error", err)
+		}
+	}()
+
+	if operation == "check" {
+		if err := database.IntegrityCheck(ctx); err != nil {
+			slog.Error("database integrity check failed", "error", err)
+			return 1
+		}
+		slog.Info("database integrity check passed", "database", databasePath)
+		return 0
+	}
+	if err := database.Backup(ctx, destination); err != nil {
+		slog.Error("database backup failed", "error", err)
+		return 1
+	}
+	slog.Info("database backup completed", "destination", strings.TrimSpace(destination))
+	return 0
 }
 
 func runDemo() int {
@@ -212,7 +270,17 @@ func pruneExpiredIssues(
 	now time.Time,
 ) (int64, error) {
 	cutoff := now.UTC().Add(-time.Duration(days) * 24 * time.Hour)
-	return pruner.PruneIssues(ctx, projectID, cutoff)
+	var total int64
+	for {
+		deleted, err := pruner.PruneIssues(ctx, projectID, cutoff)
+		total += deleted
+		if err != nil {
+			return total, err
+		}
+		if deleted < store.PruneBatchSize {
+			return total, nil
+		}
+	}
 }
 
 type httpShutdowner interface {

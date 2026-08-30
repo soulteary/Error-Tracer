@@ -57,7 +57,8 @@ The sign-in panel then offers **Explore the read-only demo**. The demo includes
 five realistic issues across `open`, `resolved`, and `ignored` states, with 106
 sample occurrences in total. Filtering, pagination, issue details, localized
 dates, and the English/Simplified Chinese UI can be evaluated without an admin
-token.
+token. The public event-history endpoint exposes the retained occurrences behind
+each fixture.
 
 For a link that opens the sample dashboard immediately, add `demo=1`:
 
@@ -96,6 +97,7 @@ that do not need a public product tour.
 | `GET` | `/api/v1/demo/issues` | Paginated built-in issue list |
 | `GET` | `/api/v1/demo/issues?status=open` | Built-in issues filtered by status |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | One built-in issue and its latest event |
+| `GET` | `/api/v1/demo/issues/{fingerprint}/events` | Retained fixture occurrences |
 
 The list endpoint accepts the same bounded `limit`, `cursor`, legacy `offset`,
 and `status` parameters as the authenticated issue API. A page with more data

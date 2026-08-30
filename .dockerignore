@@ -2,6 +2,8 @@
 .gitignore
 .github
 .env
+coverage.out
+error-tracer
 *.db
 *.db-*
 *.db3

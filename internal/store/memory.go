@@ -11,13 +11,39 @@ import (
 
 // Memory is a concurrency-safe in-memory store for development and tests.
 type Memory struct {
-	mu     sync.RWMutex
-	issues map[string]Issue
+	mu                sync.RWMutex
+	issues            map[string]Issue
+	events            map[string][]memoryEvent
+	nextEventSequence int64
+	maxEventsPerIssue int
 }
 
 // NewMemory creates an empty in-memory store.
 func NewMemory() *Memory {
-	return &Memory{issues: make(map[string]Issue)}
+	return NewMemoryWithOptions(MemoryOptions{})
+}
+
+// MemoryOptions controls retained occurrence history.
+type MemoryOptions struct {
+	MaxEventsPerIssue int
+}
+
+// NewMemoryWithOptions creates an empty in-memory store with explicit bounds.
+func NewMemoryWithOptions(options MemoryOptions) *Memory {
+	maxEvents := options.MaxEventsPerIssue
+	if maxEvents < 1 || maxEvents > MaxEventsPerIssue {
+		maxEvents = DefaultMaxEventsPerIssue
+	}
+	return &Memory{
+		issues:            make(map[string]Issue),
+		events:            make(map[string][]memoryEvent),
+		maxEventsPerIssue: maxEvents,
+	}
+}
+
+type memoryEvent struct {
+	sequence int64
+	event    event.Event
 }
 
 // Record adds an event to its fingerprint group.
@@ -44,6 +70,7 @@ func (m *Memory) RecordBatch(ctx context.Context, projectID string, captured []e
 	defer m.mu.Unlock()
 
 	fingerprints := make([]string, len(events))
+	touched := make(map[string]struct{}, len(events))
 	for index, item := range events {
 		fingerprint := item.Fingerprint()
 		fingerprints[index] = fingerprint
@@ -63,6 +90,8 @@ func (m *Memory) RecordBatch(ctx context.Context, projectID string, captured []e
 				LastSeen:    item.ReceivedAt,
 				LastEvent:   item,
 			}
+		} else if issue.Status == IssueStatusResolved {
+			issue.Status = IssueStatusOpen
 		}
 
 		issue.Occurrences++
@@ -74,12 +103,77 @@ func (m *Memory) RecordBatch(ctx context.Context, projectID string, captured []e
 			issue.LastEvent = item
 		}
 		m.issues[key] = issue
+		m.nextEventSequence++
+		m.events[key] = append(m.events[key], memoryEvent{
+			sequence: m.nextEventSequence,
+			event:    cloneEvent(item),
+		})
+		touched[key] = struct{}{}
+	}
+	for key := range touched {
+		history := m.events[key]
+		sort.Slice(history, func(left, right int) bool {
+			if history[left].event.ReceivedAt.Equal(history[right].event.ReceivedAt) {
+				return history[left].sequence > history[right].sequence
+			}
+			return history[left].event.ReceivedAt.After(history[right].event.ReceivedAt)
+		})
+		if len(history) > m.maxEventsPerIssue {
+			history = history[:m.maxEventsPerIssue]
+		}
+		m.events[key] = history
 	}
 	issues := make([]Issue, len(events))
 	for index, fingerprint := range fingerprints {
 		issues[index] = cloneIssue(m.issues[issueKey(projectID, fingerprint)])
 	}
 	return issues, nil
+}
+
+// ListIssueEvents returns retained occurrences ordered newest first.
+func (m *Memory) ListIssueEvents(
+	ctx context.Context,
+	projectID, fingerprint string,
+	options EventListOptions,
+) (EventPage, error) {
+	if err := ctx.Err(); err != nil {
+		return EventPage{}, err
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return EventPage{}, ErrProjectRequired
+	}
+	options = normalizeEventListOptions(options)
+	key := issueKey(projectID, fingerprint)
+
+	m.mu.RLock()
+	if _, exists := m.issues[key]; !exists {
+		m.mu.RUnlock()
+		return EventPage{}, ErrIssueNotFound
+	}
+	history := append([]memoryEvent(nil), m.events[key]...)
+	m.mu.RUnlock()
+
+	start := 0
+	if options.After != nil {
+		start = sort.Search(len(history), func(index int) bool {
+			item := history[index]
+			return item.event.ReceivedAt.Before(options.After.ReceivedAt) ||
+				(item.event.ReceivedAt.Equal(options.After.ReceivedAt) &&
+					item.sequence < options.After.Sequence)
+		})
+	}
+	end := min(start+options.Limit, len(history))
+	events := make([]event.Event, end-start)
+	for index, item := range history[start:end] {
+		events[index] = cloneEvent(item.event)
+	}
+	var next *EventCursor
+	if end < len(history) && end > start {
+		last := history[end-1]
+		next = &EventCursor{ReceivedAt: last.event.ReceivedAt, Sequence: last.sequence}
+	}
+	return EventPage{Events: events, Total: len(history), Limit: options.Limit, Next: next}, nil
 }
 
 // GetIssue returns one issue from one project.

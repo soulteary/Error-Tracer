@@ -127,6 +127,27 @@ func TestDemoModeServesIsolatedReadOnlyFixtures(t *testing.T) {
 		t.Fatalf("detail status = %d, want %d", detailResponse.Code, http.StatusOK)
 	}
 
+	historyResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		historyResponse,
+		httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/demo/issues/"+page.Issues[0].Fingerprint+"/events?limit=2",
+			nil,
+		),
+	)
+	if historyResponse.Code != http.StatusOK {
+		t.Fatalf("history status = %d, want %d", historyResponse.Code, http.StatusOK)
+	}
+	var history eventPageResponse
+	if err := json.NewDecoder(historyResponse.Body).Decode(&history); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	if history.Total != int(page.Issues[0].Occurrences) ||
+		len(history.Events) != 2 || history.NextCursor == "" {
+		t.Fatalf("demo history = %#v, want two events and a cursor", history)
+	}
+
 	patchResponse := httptest.NewRecorder()
 	app.Handler().ServeHTTP(
 		patchResponse,
