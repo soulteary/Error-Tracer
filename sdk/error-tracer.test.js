@@ -146,6 +146,32 @@ test("beforeSend can modify or drop an event", async () => {
   assert.deepEqual(events[0].tags, { filtered: "yes" });
 });
 
+test("beforeSend can remove default context", async () => {
+  let captured;
+  const client = testClient({
+    release: "web@1",
+    environment: "production",
+    tags: { region: "us-east-1" },
+    beforeSend(event) {
+      delete event.page_url;
+      delete event.release;
+      delete event.environment;
+      delete event.tags;
+      return event;
+    },
+    transport(_body, payload) {
+      captured = payload.events[0];
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("redacted"), true);
+  assert.equal("page_url" in captured, false);
+  assert.equal("release" in captured, false);
+  assert.equal("environment" in captured, false);
+  assert.equal("tags" in captured, false);
+});
+
 test("sampling and the per-minute budget bound traffic", async () => {
   let sent = 0;
   const sampledOut = testClient({
@@ -248,6 +274,41 @@ test("default transport falls back to credential-free fetch", async () => {
   assert.equal(JSON.parse(request.options.body).events[0].message, "boom");
 });
 
+test("default transport disables keepalive for large payloads", async () => {
+  let beaconCalled = false;
+  let request;
+  const runtime = {
+    location: { href: "https://app.example/page" },
+    navigator: {
+      sendBeacon() {
+        beaconCalled = true;
+        return true;
+      },
+    },
+    Blob,
+    fetch(endpoint, options) {
+      request = { endpoint, options };
+      return Promise.resolve({ ok: true });
+    },
+  };
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    random: () => 0,
+    clock: () => FIXED_TIME,
+    batchSize: 1,
+    maxBatchBytes: 128 * 1024,
+  });
+
+  assert.equal(await client.capture({
+    kind: "error",
+    message: "boom",
+    stack: "x".repeat(63 * 1024),
+  }), true);
+  assert.equal(beaconCalled, false);
+  assert.equal(request.options.keepalive, false);
+});
+
 test("capture contains extension and transport failures", async () => {
   const badRandom = testClient({
     random() {
@@ -276,6 +337,142 @@ test("capture contains extension and transport failures", async () => {
     },
   });
   assert.equal(await testClient().capture(hostile), false);
+});
+
+test("capture contains JSON serialization failures", async () => {
+  const original = JSON.stringify;
+  let result;
+  try {
+    JSON.stringify = function failSerialization() {
+      throw new Error("serialization failed");
+    };
+    result = await testClient().captureMessage("boom");
+  } finally {
+    JSON.stringify = original;
+  }
+  assert.equal(result, false);
+});
+
+test("capture rejects a non-string JSON serialization result", async () => {
+  const original = JSON.stringify;
+  let result;
+  let transports = 0;
+  try {
+    JSON.stringify = () => undefined;
+    result = await testClient({
+      transport() {
+        transports++;
+        return true;
+      },
+    }).captureMessage("boom");
+  } finally {
+    JSON.stringify = original;
+  }
+  assert.equal(result, false);
+  assert.equal(transports, 0);
+});
+
+test("capture rejects serialized bodies without the expected envelope", async () => {
+  const original = JSON.stringify;
+  const results = [];
+  let transports = 0;
+  try {
+    for (const serialized of ["null", "{}", '{"project_key":"wrong","events":[]}']) {
+      JSON.stringify = () => serialized;
+      results.push(await testClient({
+        transport() {
+          transports++;
+          return true;
+        },
+      }).captureMessage("boom"));
+    }
+  } finally {
+    JSON.stringify = original;
+  }
+  assert.deepEqual(results, [false, false, false]);
+  assert.equal(transports, 0);
+});
+
+test("retries events when grouping serialization temporarily fails", async () => {
+  const original = JSON.stringify;
+  const payloads = [];
+  let retryCallback;
+  const client = testClient({
+    runtime: {
+      location: { href: "https://app.example/page" },
+      setTimeout(callback) {
+        retryCallback = callback;
+        return 1;
+      },
+      clearTimeout() {},
+    },
+    batchSize: 3,
+    flushInterval: 0,
+    retryBaseDelay: 1,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+  assert.equal(await client.captureMessage("one"), true);
+  assert.equal(await client.captureMessage("two"), true);
+
+  let delivery;
+  try {
+    JSON.stringify = () => { throw new Error("temporarily unavailable"); };
+    delivery = client.flush();
+    await eventLoopTurn();
+    const releaseRetry = retryCallback;
+    JSON.stringify = original;
+    assert.equal(typeof releaseRetry, "function");
+    releaseRetry();
+  } finally {
+    JSON.stringify = original;
+  }
+
+  assert.equal(await delivery, true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 2, dropped: 0, failed: 0, batches: 2, retries: 1,
+  });
+});
+
+test("batch serialization ignores inherited toJSON hooks", async () => {
+  const original = Object.prototype.toJSON;
+  const bodies = [];
+  try {
+    for (const replacement of [
+      () => null,
+      () => ({}),
+      () => { throw new Error("inherited hook must not run"); },
+    ]) {
+      Object.prototype.toJSON = replacement;
+      const client = testClient({
+        batchSize: 1,
+        transport(body) {
+          bodies.push(body);
+          return true;
+        },
+      });
+      assert.equal(await client.captureMessage("boom"), true);
+    }
+  } finally {
+    if (original === undefined) {
+      delete Object.prototype.toJSON;
+    } else {
+      Object.prototype.toJSON = original;
+    }
+  }
+  assert.equal(bodies.length, 3);
+  for (const body of bodies) {
+    const payload = JSON.parse(body);
+    assert.equal(payload.project_key, PROJECT_KEY);
+    assert.equal(payload.events.length, 1);
+    assert.equal(payload.events[0].message, "boom");
+  }
 });
 
 test("automatically captures runtime, resource, and rejection failures", async () => {
@@ -345,6 +542,7 @@ test("automatic capture can be installed and destroyed idempotently", () => {
   assert.equal(runtime.listenerCount("error"), 1);
   assert.equal(runtime.listenerCount("unhandledrejection"), 1);
   assert.equal(runtime.listenerCount("pagehide"), 1);
+  assert.equal(runtime.document.listenerCount("visibilitychange"), 1);
 
   client.destroy();
   client.destroy();
@@ -352,6 +550,33 @@ test("automatic capture can be installed and destroyed idempotently", () => {
   assert.equal(runtime.listenerCount("error"), 0);
   assert.equal(runtime.listenerCount("unhandledrejection"), 0);
   assert.equal(runtime.listenerCount("pagehide"), 0);
+  assert.equal(runtime.document.listenerCount("visibilitychange"), 0);
+});
+
+test("automatic capture rolls back partial listener installation", () => {
+  const listeners = new Map();
+  const runtime = {
+    addEventListener(type, listener) {
+      if (type === "unhandledrejection") {
+        throw new Error("registration failed");
+      }
+      listeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) {
+        listeners.delete(type);
+      }
+    },
+  };
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    autoCapture: false,
+  });
+
+  assert.equal(client.install(), false);
+  assert.equal(client.installed, false);
+  assert.equal(listeners.size, 0);
 });
 
 test("serializes plain-object rejection reasons", async () => {
@@ -421,6 +646,23 @@ test("splits a queue before the configured request-size limit", async () => {
   assert.deepEqual(payloads.map((payload) => payload.events.length), [1, 1]);
 });
 
+test("drops an event that exceeds maxBatchBytes by itself", async () => {
+  let transportCalled = false;
+  const client = testClient({
+    maxBatchBytes: 1024,
+    transport() {
+      transportCalled = true;
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("x".repeat(2000)), false);
+  assert.equal(transportCalled, false);
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+  });
+});
+
 test("flushes a partial queue after the configured interval", async () => {
   let scheduled;
   const payloads = [];
@@ -485,6 +727,252 @@ test("bounds the queue while another batch is in flight", async () => {
   });
 });
 
+test("rejects an oversized event before it can evict queued events", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 1,
+    maxQueueSize: 2,
+    maxBatchBytes: 1024,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  assert.equal(await client.captureMessage("three"), true);
+  assert.equal(await client.captureMessage("x".repeat(2000)), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 2, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  await eventLoopTurn();
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three"],
+  );
+});
+
+test("flush waits for events queued during an active delivery", async () => {
+  let releaseFirst;
+  let releaseSecond;
+  const deliveries = [
+    new Promise((resolve) => { releaseFirst = resolve; }),
+    new Promise((resolve) => { releaseSecond = resolve; }),
+  ];
+  const messages = [];
+  const client = testClient({
+    transport(_body, payload) {
+      messages.push(payload.events[0].message);
+      return deliveries[messages.length - 1];
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  let flushResolved = false;
+  const flush = client.flush().then((accepted) => {
+    flushResolved = true;
+    return accepted;
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  await eventLoopTurn();
+  assert.deepEqual(messages, ["one", "two"]);
+  assert.equal(flushResolved, false);
+
+  releaseSecond(true);
+  assert.equal(await flush, true);
+  assert.equal(flushResolved, true);
+});
+
+test("flush reserves the events queued when it is called", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 1,
+    maxQueueSize: 1,
+    maxEventsPerMinute: 3,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  const flush = client.flush();
+  assert.equal(await client.captureMessage("three"), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 1, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  assert.equal(await flush, true);
+  await eventLoopTurn();
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two"],
+  );
+  assert.equal(client.getStats().dropped, 1);
+  assert.equal(await client.captureMessage("four"), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "four"],
+  );
+});
+
+test("bounds snapshots reserved behind a stalled delivery", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 3,
+    maxQueueSize: 3,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("one"), true);
+  const firstFlush = client.flush();
+  for (const message of ["two", "three", "four"]) {
+    assert.equal(await client.captureMessage(message), true);
+    client.flush();
+  }
+  assert.equal(await client.captureMessage("five"), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 3, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstFlush, true);
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three", "four"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 4, dropped: 1, failed: 0, batches: 4, retries: 0,
+  });
+});
+
+test("keeps unsent sub-batches reserved behind a stalled sub-batch", async () => {
+  let releaseFirst;
+  let releaseSecond;
+  const deliveries = [
+    new Promise((resolve) => { releaseFirst = resolve; }),
+    new Promise((resolve) => { releaseSecond = resolve; }),
+  ];
+  const payloads = [];
+  const client = testClient({
+    batchSize: 2,
+    maxQueueSize: 3,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return deliveries[payloads.length - 1] || true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("one"), true);
+  const firstFlush = client.captureMessage("two");
+  for (const message of ["three", "four", "five"]) {
+    assert.equal(await client.captureMessage(message), true);
+  }
+  const pendingFlush = client.flush();
+
+  releaseFirst(true);
+  assert.equal(await firstFlush, true);
+  await eventLoopTurn();
+  assert.deepEqual(
+    payloads.map((payload) => payload.events.map((event) => event.message)),
+    [["one", "two"], ["three", "four"]],
+  );
+  assert.equal(client.getStats().queued, 1);
+
+  for (const message of ["six", "seven", "eight"]) {
+    assert.equal(await client.captureMessage(message), true);
+  }
+  assert.deepEqual(client.getStats(), {
+    queued: 3, sent: 2, dropped: 1, failed: 0, batches: 1, retries: 0,
+  });
+
+  releaseSecond(true);
+  assert.equal(await pendingFlush, true);
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three", "four", "five", "seven", "eight"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 7, dropped: 1, failed: 0, batches: 4, retries: 0,
+  });
+});
+
+test("keeps initial unsent sub-batches reserved behind a stalled sub-batch", async () => {
+  let releaseFirst;
+  const firstDelivery = new Promise((resolve) => { releaseFirst = resolve; });
+  const payloads = [];
+  const client = testClient({
+    batchSize: 3,
+    maxQueueSize: 3,
+    maxBatchBytes: 1024,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+  const large = (label) => `${label}:${"x".repeat(700)}`;
+  const messages = ["one", "two", "three", "four", "five", "six"].map(large);
+
+  assert.equal(await client.captureMessage(messages[0]), true);
+  assert.equal(await client.captureMessage(messages[1]), true);
+  const initialFlush = client.captureMessage(messages[2]);
+  await eventLoopTurn();
+  assert.deepEqual(payloads.map((payload) => payload.events.length), [1]);
+  assert.equal(client.getStats().queued, 2);
+
+  for (const message of messages.slice(3)) {
+    assert.equal(await client.captureMessage(message), true);
+  }
+  assert.deepEqual(client.getStats(), {
+    queued: 3, sent: 0, dropped: 2, failed: 0, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await initialFlush, true);
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    [messages[0], messages[1], messages[2], messages[5]],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 4, dropped: 2, failed: 0, batches: 4, retries: 0,
+  });
+});
+
 test("retries failed batches with a finite budget", async () => {
   let attempts = 0;
   const runtime = {
@@ -534,6 +1022,32 @@ test("pagehide flushes a partial queue", async () => {
   assert.equal(payloads[0].events[0].message, "leaving");
 });
 
+test("visibilitychange flushes when the document becomes hidden", async () => {
+  const payloads = [];
+  const runtime = fakeRuntime();
+  const client = testClient({
+    runtime,
+    batchSize: 10,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("backgrounded"), true);
+  runtime.document.visibilityState = "visible";
+  runtime.document.dispatch("visibilitychange", {});
+  await eventLoopTurn();
+  assert.equal(payloads.length, 0);
+
+  runtime.document.visibilityState = "hidden";
+  runtime.document.dispatch("visibilitychange", {});
+  await eventLoopTurn();
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].events[0].message, "backgrounded");
+});
+
 function testClient(overrides) {
   return ErrorTracer.init({
     projectKey: PROJECT_KEY,
@@ -549,9 +1063,17 @@ function testClient(overrides) {
 }
 
 function fakeRuntime() {
+  const runtimeTarget = fakeEventTarget();
+  const documentTarget = fakeEventTarget();
+  return Object.assign(runtimeTarget, {
+    location: { href: "https://app.example/page?secret=1#fragment" },
+    document: Object.assign(documentTarget, { visibilityState: "visible" }),
+  });
+}
+
+function fakeEventTarget() {
   const listeners = new Map();
   return {
-    location: { href: "https://app.example/page?secret=1#fragment" },
     addEventListener(type, listener) {
       const registered = listeners.get(type) || new Set();
       registered.add(listener);

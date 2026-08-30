@@ -20,7 +20,9 @@
     tagKey: 64,
     tagValue: 256,
   });
+  const KEEPALIVE_BODY_LIMIT = 60 * 1024;
   const EVENT_KINDS = new Set(["error", "unhandled_rejection", "resource_error"]);
+  const parseJSON = JSON.parse;
 
   class Client {
     constructor(options) {
@@ -72,7 +74,7 @@
         options.retryBaseDelay, 250, 1, 10_000, "retryBaseDelay",
       );
       this.maxBatchBytes = integerOption(
-        options.maxBatchBytes, 512 * 1024, 1024, 900 * 1024, "maxBatchBytes",
+        options.maxBatchBytes, KEEPALIVE_BODY_LIMIT, 1024, 900 * 1024, "maxBatchBytes",
       );
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);
@@ -91,6 +93,7 @@
       this.transport = options.transport ||
         defaultTransport(this.runtime, this.batchEndpoint);
       this.queue = [];
+      this.reservedCount = 0;
       this.flushTimer = null;
       this.flushPromise = null;
       this.stats = {
@@ -104,6 +107,12 @@
       this.errorListener = (event) => this.captureWindowError(event);
       this.rejectionListener = (event) => this.captureUnhandledRejection(event);
       this.pagehideListener = () => this.settle(this.flush());
+      this.visibilityTarget = safeRead(this.runtime, "document") || null;
+      this.visibilityListener = () => {
+        if (safeRead(this.visibilityTarget, "visibilityState") === "hidden") {
+          this.settle(this.flush());
+        }
+      };
       if (options.autoCapture !== false) {
         this.install();
       }
@@ -117,9 +126,30 @@
           typeof this.runtime.removeEventListener !== "function") {
         return false;
       }
-      this.runtime.addEventListener("error", this.errorListener, true);
-      this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
-      this.runtime.addEventListener("pagehide", this.pagehideListener, false);
+      const installed = [];
+      try {
+        this.runtime.addEventListener("error", this.errorListener, true);
+        installed.push([this.runtime, "error", this.errorListener, true]);
+        this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
+        installed.push([this.runtime, "unhandledrejection", this.rejectionListener, false]);
+        this.runtime.addEventListener("pagehide", this.pagehideListener, false);
+        installed.push([this.runtime, "pagehide", this.pagehideListener, false]);
+        if (this.visibilityTarget &&
+            typeof safeRead(this.visibilityTarget, "addEventListener") === "function" &&
+            typeof safeRead(this.visibilityTarget, "removeEventListener") === "function") {
+          this.visibilityTarget.addEventListener(
+            "visibilitychange", this.visibilityListener, false,
+          );
+          installed.push([
+            this.visibilityTarget, "visibilitychange", this.visibilityListener, false,
+          ]);
+        }
+      } catch (_) {
+        for (const registration of installed.reverse()) {
+          removeListener(...registration);
+        }
+        return false;
+      }
       this.installed = true;
       return true;
     }
@@ -127,9 +157,12 @@
     destroy() {
       if (this.installed && this.runtime &&
           typeof this.runtime.removeEventListener === "function") {
-        this.runtime.removeEventListener("error", this.errorListener, true);
-        this.runtime.removeEventListener("unhandledrejection", this.rejectionListener, false);
-        this.runtime.removeEventListener("pagehide", this.pagehideListener, false);
+        removeListener(this.runtime, "error", this.errorListener, true);
+        removeListener(this.runtime, "unhandledrejection", this.rejectionListener, false);
+        removeListener(this.runtime, "pagehide", this.pagehideListener, false);
+        removeListener(
+          this.visibilityTarget, "visibilitychange", this.visibilityListener, false,
+        );
       }
       this.clearFlushTimer();
       this.settle(this.flush());
@@ -227,7 +260,7 @@
 
       let captured;
       try {
-        captured = this.normalize(candidate);
+        captured = this.normalize(candidate, true);
       } catch (_) {
         return Promise.resolve(false);
       }
@@ -244,7 +277,7 @@
           return Promise.resolve(false);
         }
         try {
-          captured = this.normalize(captured);
+          captured = this.normalize(captured, false);
         } catch (_) {
           return Promise.resolve(false);
         }
@@ -259,12 +292,22 @@
       } catch (_) {
         return Promise.resolve(false);
       }
-      if (!this.consumeBudget(now.getTime())) {
-        return Promise.resolve(false);
-      }
       captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
 
-      this.enqueue(captured);
+      const singleBody = safeSerialize(this.projectKey, [captured]);
+      if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
+        this.stats.failed++;
+        this.stats.dropped++;
+        return Promise.resolve(false);
+      }
+      if (!this.hasBudget(now.getTime())) {
+        return Promise.resolve(false);
+      }
+
+      if (!this.enqueue(captured)) {
+        return Promise.resolve(false);
+      }
+      this.sentAt.push(now.getTime());
       if (this.queue.length >= this.batchSize) {
         if (this.flushPromise) {
           return Promise.resolve(true);
@@ -275,7 +318,7 @@
       return Promise.resolve(true);
     }
 
-    normalize(candidate) {
+    normalize(candidate, applyDefaults) {
       if (!candidate || typeof candidate !== "object") {
         return null;
       }
@@ -293,10 +336,9 @@
         return null;
       }
 
-      const pageURL = truncateUTF8(
-        scrubURL(safeRead(candidate, "page_url") || readLocation(this.runtime), this.runtime),
-        LIMITS.url,
-      );
+      const pageValue = safeRead(candidate, "page_url") ||
+        (applyDefaults ? readLocation(this.runtime) : "");
+      const pageURL = truncateUTF8(scrubURL(pageValue, this.runtime), LIMITS.url);
       return compactObject({
         kind,
         message,
@@ -307,47 +349,66 @@
         column: nonNegativeInteger(safeRead(candidate, "column")),
         occurred_at: validISODate(safeRead(candidate, "occurred_at")),
         release: truncateUTF8(
-          cleanString(safeRead(candidate, "release") || this.release),
+          cleanString(safeRead(candidate, "release") || (applyDefaults ? this.release : "")),
           LIMITS.release,
         ),
         environment: truncateUTF8(
-          cleanString(safeRead(candidate, "environment") || this.environment),
+          cleanString(
+            safeRead(candidate, "environment") || (applyDefaults ? this.environment : ""),
+          ),
           LIMITS.environment,
         ),
-        tags: normalizeTags(mergeTags(this.tags, safeRead(candidate, "tags"))),
+        tags: normalizeTags(applyDefaults
+          ? mergeTags(this.tags, safeRead(candidate, "tags"))
+          : safeRead(candidate, "tags")),
       });
     }
 
-    consumeBudget(now) {
+    hasBudget(now) {
       const cutoff = now - 60_000;
       while (this.sentAt.length && this.sentAt[0] <= cutoff) {
         this.sentAt.shift();
       }
-      if (this.sentAt.length >= this.maxEventsPerMinute) {
-        return false;
-      }
-      this.sentAt.push(now);
-      return true;
+      return this.sentAt.length < this.maxEventsPerMinute;
     }
 
     enqueue(captured) {
-      if (this.queue.length >= this.maxQueueSize) {
+      if (this.queue.length + this.reservedCount >= this.maxQueueSize) {
+        if (!this.queue.length) {
+          this.stats.dropped++;
+          return false;
+        }
         this.queue.shift();
         this.stats.dropped++;
       }
       this.queue.push(cloneEvent(captured));
+      return true;
     }
 
     flush() {
-      if (this.flushPromise) {
-        return this.flushPromise;
-      }
       this.clearFlushTimer();
       if (!this.queue.length) {
-        return Promise.resolve(true);
+        return this.flushPromise || Promise.resolve(true);
       }
       const pending = this.queue.splice(0);
-      this.flushPromise = this.sendPending(pending).finally(() => {
+      const active = this.flushPromise;
+      if (active) {
+        this.reservedCount += pending.length;
+      }
+      const send = () => {
+        return this.sendPending(pending, Boolean(active));
+      };
+      const delivery = active
+        ? active.then(
+          (accepted) => send().then((drained) => accepted && drained),
+          () => send().then(() => false),
+        )
+        : send();
+      let tracked;
+      tracked = delivery.finally(() => {
+        if (this.flushPromise !== tracked) {
+          return;
+        }
         this.flushPromise = null;
         if (this.queue.length >= this.batchSize) {
           this.settle(this.flush());
@@ -355,30 +416,67 @@
           this.scheduleFlush();
         }
       });
-      return this.flushPromise;
+      this.flushPromise = tracked;
+      return tracked;
     }
 
-    sendPending(pending) {
-      const batches = this.makeBatches(pending);
-      return batches.reduce(
-        (result, events) => result.then((accepted) =>
-          this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted)),
-        Promise.resolve(true),
+    sendPending(pending, reserved) {
+      const grouped = this.makeBatches(pending);
+      if (grouped.rejected) {
+        if (reserved) {
+          this.reservedCount -= grouped.rejected;
+        }
+        this.stats.failed += grouped.rejected;
+        this.stats.dropped += grouped.rejected;
+      }
+
+      if (!reserved) {
+        for (const events of grouped.batches.slice(1)) {
+          this.reservedCount += events.length;
+        }
+      }
+      return grouped.batches.reduce(
+        (result, events, index) => result.then((accepted) => {
+          if (reserved || index > 0) {
+            this.reservedCount -= events.length;
+          }
+          return this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted);
+        }),
+        Promise.resolve(grouped.rejected === 0),
       );
     }
 
     makeBatches(pending) {
       const batches = [];
       let current = [];
+      let rejected = 0;
       for (const captured of pending) {
         const candidate = current.concat([captured]);
-        const candidateBody = JSON.stringify({
-          project_key: this.projectKey,
-          events: candidate,
-        });
-        if (current.length && utf8Length(candidateBody) > this.maxBatchBytes) {
+        const candidateBody = safeSerialize(this.projectKey, candidate);
+        if (candidateBody === null) {
+          if (current.length) {
+            batches.push(current);
+            current = [];
+          }
+          batches.push([captured]);
+          continue;
+        }
+        if (utf8Length(candidateBody) > this.maxBatchBytes) {
+          if (!current.length) {
+            rejected++;
+            continue;
+          }
           batches.push(current);
-          current = [captured];
+          const singleBody = safeSerialize(this.projectKey, [captured]);
+          if (singleBody === null) {
+            batches.push([captured]);
+            current = [];
+          } else if (utf8Length(singleBody) > this.maxBatchBytes) {
+            rejected++;
+            current = [];
+          } else {
+            current = [captured];
+          }
         } else {
           current = candidate;
         }
@@ -390,12 +488,20 @@
       if (current.length) {
         batches.push(current);
       }
-      return batches;
+      return { batches, rejected };
     }
 
     sendBatch(events, attempt) {
       const payload = { project_key: this.projectKey, events };
-      const body = JSON.stringify(payload);
+      const body = safeSerialize(this.projectKey, events);
+      if (body === null) {
+        return this.retryBatch(events, attempt);
+      }
+      if (utf8Length(body) > this.maxBatchBytes) {
+        this.stats.failed += events.length;
+        this.stats.dropped += events.length;
+        return Promise.resolve(false);
+      }
       let result;
       try {
         result = Promise.resolve(this.transport(body, payload));
@@ -467,7 +573,7 @@
 
     getStats() {
       return Object.freeze({
-        queued: this.queue.length,
+        queued: this.queue.length + this.reservedCount,
         sent: this.stats.sent,
         dropped: this.stats.dropped,
         failed: this.stats.failed,
@@ -493,10 +599,12 @@
 
   function defaultTransport(runtime, endpoint) {
     return function send(body) {
+      const keepalive = utf8Length(body) <= KEEPALIVE_BODY_LIMIT;
       const navigator = safeRead(runtime, "navigator");
       const BlobConstructor = safeRead(runtime, "Blob");
       const sendBeacon = safeRead(navigator, "sendBeacon");
-      if (typeof sendBeacon === "function" && typeof BlobConstructor === "function") {
+      if (keepalive && typeof sendBeacon === "function" &&
+          typeof BlobConstructor === "function") {
         try {
           const blob = new BlobConstructor([body], { type: "text/plain;charset=UTF-8" });
           if (sendBeacon.call(navigator, endpoint, blob)) {
@@ -516,7 +624,7 @@
         headers: { "Content-Type": "application/json" },
         body,
         credentials: "omit",
-        keepalive: true,
+        keepalive,
       }).then((response) => Boolean(response && response.ok));
     };
   }
@@ -623,6 +731,71 @@
     } catch (_) {
       return "";
     }
+  }
+
+  function removeListener(target, type, listener, options) {
+    try {
+      const remove = safeRead(target, "removeEventListener");
+      if (typeof remove === "function") {
+        remove.call(target, type, listener, options);
+      }
+    } catch (_) {
+      // Listener cleanup is best-effort and must not escape into the host page.
+    }
+  }
+
+  function safeSerialize(projectKey, events) {
+    try {
+      const serializedEvents = events.map((value) => {
+        const captured = Object.create(null);
+        for (const [key, item] of Object.entries(value)) {
+          if (key === "tags" && item && typeof item === "object") {
+            const tags = Object.create(null);
+            for (const [tagKey, tagValue] of Object.entries(item)) {
+              tags[tagKey] = tagValue;
+            }
+            captured[key] = tags;
+          } else {
+            captured[key] = item;
+          }
+        }
+        return captured;
+      });
+      Object.defineProperty(serializedEvents, "toJSON", { value: undefined });
+      const envelope = Object.create(null);
+      envelope.project_key = projectKey;
+      envelope.events = serializedEvents;
+      const serialized = JSON.stringify(envelope);
+      if (typeof serialized !== "string") {
+        return null;
+      }
+      return sameJSONValue(parseJSON(serialized), envelope) ? serialized : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function sameJSONValue(actual, expected) {
+    if (actual === expected) {
+      return true;
+    }
+    if (!actual || !expected || typeof actual !== "object" || typeof expected !== "object") {
+      return false;
+    }
+    if (Array.isArray(actual) !== Array.isArray(expected)) {
+      return false;
+    }
+    const actualKeys = Object.keys(actual);
+    const expectedKeys = Object.keys(expected);
+    if (actualKeys.length !== expectedKeys.length) {
+      return false;
+    }
+    for (const key of expectedKeys) {
+      if (!actualKeys.includes(key) || !sameJSONValue(actual[key], expected[key])) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function safeRead(value, property) {
