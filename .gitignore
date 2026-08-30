@@ -1,5 +1,7 @@
 /*.iml
 .env
+/coverage.out
+/error-tracer
 
 # Local SQLite databases and their journal/WAL sidecars.
 *.db

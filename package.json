@@ -6,6 +6,7 @@
   "license": "Apache-2.0",
   "type": "commonjs",
   "scripts": {
+    "check:docs": "node scripts/check-doc-links.mjs",
     "test": "node --test sdk/*.test.js"
   },
   "engines": {
