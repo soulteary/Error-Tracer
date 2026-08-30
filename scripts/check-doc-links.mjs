@@ -221,6 +221,7 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
       containers.push({
         type: "list",
         indent: list.indent,
+        markerIndent: list.markerIndent,
         orderedStart: list.orderedStart,
       });
       continue;
@@ -281,6 +282,7 @@ function listMarkerPrefix(value) {
       return {
         length: firstPaddingEnd,
         indent: firstPaddingColumn,
+        markerIndent: marker[1].length,
         orderedStart: marker[2] === undefined ? null : Number(marker[2]),
       };
     }
@@ -289,6 +291,7 @@ function listMarkerPrefix(value) {
   return {
     length: index,
     indent: column,
+    markerIndent: marker[1].length,
     orderedStart: marker[2] === undefined ? null : Number(marker[2]),
   };
 }
@@ -319,6 +322,9 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
   while (state.index < index) {
     const previous = state.index;
     state.index++;
+    if (startsNewListItem(lines[previous], containers)) {
+      state.paragraphOpen = false;
+    }
     const content = continueBlockContainers(lines[previous], containers);
     if (content === null) {
       state.paragraphOpen = state.paragraphOpen &&
@@ -336,7 +342,7 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     }
     state.paragraphOpen = nextParagraphOpen;
   }
-  return state.paragraphOpen;
+  return !startsNewListItem(lines[index], containers) && state.paragraphOpen;
 }
 
 function paragraphOpenAfter(line, paragraphOpen) {
@@ -386,6 +392,33 @@ function blockContainerPrefix(line, containers) {
     count++;
   }
   return { content: remaining, count };
+}
+
+function startsNewListItem(line, containers) {
+  if (line === undefined) {
+    return false;
+  }
+  let remaining = line.replace(/\r$/, "");
+  for (const container of containers) {
+    if (container.type === "quote") {
+      const quote = remaining.match(/^ {0,3}>[ \t]?/);
+      if (!quote) {
+        return false;
+      }
+      remaining = remaining.slice(quote[0].length);
+      continue;
+    }
+    const marker = listMarkerPrefix(remaining);
+    if (marker?.markerIndent === container.markerIndent) {
+      return true;
+    }
+    const stripped = stripIndent(remaining, container.indent);
+    if (stripped === null) {
+      return false;
+    }
+    remaining = stripped;
+  }
+  return false;
 }
 
 function lazyParagraphContinuation(line, containers) {
@@ -502,9 +535,10 @@ function withoutFencedCode(contents) {
       : parseBlockContainers(line, orderedListCanInterrupt);
     activeContainers = parsed.containers;
     if (stripIndent(parsed.content, 4) !== null &&
-        !paragraphOpenBefore(
-          output, output.length, parsed.containers, paragraphCache,
-        )) {
+        (startsNewListItem(line, parsed.containers) ||
+         !paragraphOpenBefore(
+           output, output.length, parsed.containers, paragraphCache,
+         ))) {
       output.push("");
       continue;
     }

@@ -256,6 +256,11 @@ test("ignores links in four-column indented code", () => {
     ].join("\n"),
     ">     [quoted](docs/quoted-missing.md)",
     "-     [listed](docs/listed-missing.md)",
+    [
+      "- Previous item",
+      "  continuation",
+      "-     [sibling-code](docs/sibling-code-missing.md)",
+    ].join("\n"),
     "\t[tabbed](docs/tabbed-missing.md)",
   ]) {
     assert.deepEqual(markdownTargets(contents), []);
@@ -276,6 +281,25 @@ test("keeps indented list continuations visible", () => {
     "  continued",
     "  [second](docs/second.md)",
   ].join("\n")), ["docs/inline.md", "docs/second.md"]);
+});
+
+test("resets paragraph state between sibling list items", () => {
+  assert.deepEqual(markdownTargets([
+    "- First item",
+    "  continuation",
+    "- [second]: docs/second.md",
+    "> - Quoted item",
+    ">   continuation",
+    "> - [quoted]: docs/quoted.md",
+    "- Outer item",
+    "  - Inner item",
+    "    continuation",
+    "  - [nested]: docs/nested.md",
+  ].join("\n")), [
+    "docs/second.md",
+    "docs/quoted.md",
+    "docs/nested.md",
+  ]);
 });
 
 test("parses mixed space-and-tab list padding", () => {
