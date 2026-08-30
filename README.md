@@ -331,10 +331,12 @@ history with `ERROR_TRACER_MAX_EVENTS_PER_ISSUE`; trimming retained payloads doe
 not change the issue's lifetime occurrence count.
 
 Fingerprint v2 is upgrade-compatible with persisted v1 issues. When an issue
-first recurs, SQLite atomically rekeys the matching v1 aggregate and retained
-event history before recording the new occurrence, preserving its status,
-lifetime count, and timestamps. A v1 issue that has not recurred remains visible
-under its existing fingerprint until that lazy migration is needed.
+first recurs, SQLite locates every v1 aggregate whose last event belongs to the
+same v2 group, then atomically merges those aggregates and their retained event
+histories before recording the new occurrence. This preserves status, lifetime
+counts, and timestamps even when cache-busting frame URLs produced several v1
+keys. A v1 issue that has not recurred remains visible under its existing
+fingerprint until that lazy migration is needed.
 
 The readiness endpoint performs a bounded live read of SQLite's required schema
 and returns `503` when the store or an operational table is unavailable. The

@@ -53,49 +53,82 @@ func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
 	}
 }
 
-func TestSQLiteRecordMigratesARecurringV1Issue(t *testing.T) {
+func TestSQLiteRecordMergesEveryV1IssueInTheRecurringV2Group(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })
 	base := time.Date(2026, time.August, 30, 18, 0, 0, 0, time.UTC)
-	legacyEvent := testEvent(base)
-	legacyEvent.ID = "legacy-latest"
-	legacyPayload, err := json.Marshal(legacyEvent)
-	if err != nil {
-		t.Fatalf("encode legacy event: %v", err)
+	first := testEvent(base)
+	first.ID = "legacy-query-one"
+	first.Stack = "run@https://example.com/app.js?v=1:10:2"
+	second := first
+	second.ID = "legacy-query-two"
+	second.Stack = "run@https://example.com/app.js?v=2:10:2"
+	second.ReceivedAt = base.Add(time.Minute)
+	otherFrame := first
+	otherFrame.ID = "legacy-other-frame"
+	otherFrame.Stack = "run@https://example.com/other.js?v=1:20:4"
+
+	if first.Fingerprint() != second.Fingerprint() ||
+		first.LegacyFingerprint() == second.LegacyFingerprint() {
+		t.Fatal("test events must share v2 while retaining distinct v1 fingerprints")
 	}
-	legacyFingerprint := legacyEvent.LegacyFingerprint()
-	if _, err := database.db.Exec(`
+	if first.Fingerprint() == otherFrame.Fingerprint() {
+		t.Fatal("the unrelated frame must remain in another v2 group")
+	}
+	type legacySeed struct {
+		captured    event.Event
+		status      IssueStatus
+		occurrences int
+		firstSeen   time.Time
+		retained    int
+	}
+	seeds := []legacySeed{
+		{first, IssueStatusIgnored, 7, base.Add(-time.Hour), 2},
+		{second, IssueStatusOpen, 4, base.Add(-30 * time.Minute), 1},
+		{otherFrame, IssueStatusOpen, 5, base.Add(-15 * time.Minute), 0},
+	}
+	for seedIndex, seed := range seeds {
+		payload, err := json.Marshal(seed.captured)
+		if err != nil {
+			t.Fatalf("encode legacy issue %d: %v", seedIndex, err)
+		}
+		fingerprint := seed.captured.LegacyFingerprint()
+		if _, err := database.db.Exec(`
 INSERT INTO issues (
     project_id, fingerprint, kind, message, source_url, line, column_number,
     status, occurrences, first_seen, last_seen, last_event
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
-		"project-a", legacyFingerprint, legacyEvent.Kind, legacyEvent.Message,
-		legacyEvent.SourceURL, legacyEvent.Line, legacyEvent.Column,
-		IssueStatusIgnored, 7, base.Add(-time.Hour).UnixNano(), base.UnixNano(),
-		legacyPayload,
-	); err != nil {
-		t.Fatalf("seed legacy issue: %v", err)
-	}
-	for index := range 2 {
-		retained := legacyEvent
-		retained.ID = fmt.Sprintf("legacy-%d", index)
-		retained.ReceivedAt = base.Add(-time.Duration(index) * time.Minute)
-		payload, err := json.Marshal(retained)
-		if err != nil {
-			t.Fatalf("encode retained legacy event %d: %v", index, err)
+			"project-a", fingerprint, seed.captured.Kind, seed.captured.Message,
+			seed.captured.SourceURL, seed.captured.Line, seed.captured.Column,
+			seed.status, seed.occurrences, seed.firstSeen.UnixNano(),
+			seed.captured.ReceivedAt.UnixNano(), payload,
+		); err != nil {
+			t.Fatalf("seed legacy issue %d: %v", seedIndex, err)
 		}
-		if _, err := database.db.Exec(`
+		for retainedIndex := range seed.retained {
+			retained := seed.captured
+			retained.ID = fmt.Sprintf("legacy-%d-%d", seedIndex, retainedIndex)
+			retained.ReceivedAt = seed.captured.ReceivedAt.Add(
+				-time.Duration(retainedIndex) * time.Second,
+			)
+			payload, err := json.Marshal(retained)
+			if err != nil {
+				t.Fatalf("encode retained legacy event %d/%d: %v", seedIndex, retainedIndex, err)
+			}
+			if _, err := database.db.Exec(`
 INSERT INTO events (project_id, fingerprint, event_id, received_at, payload)
 VALUES (?, ?, ?, ?, ?)
-`, "project-a", legacyFingerprint, retained.ID, retained.ReceivedAt.UnixNano(), payload); err != nil {
-			t.Fatalf("seed retained legacy event %d: %v", index, err)
+			`, "project-a", fingerprint, retained.ID, retained.ReceivedAt.UnixNano(), payload); err != nil {
+				t.Fatalf("seed retained legacy event %d/%d: %v", seedIndex, retainedIndex, err)
+			}
 		}
 	}
 
-	recurrence := legacyEvent
+	recurrence := first
 	recurrence.ID = "v2-recurrence"
-	recurrence.ReceivedAt = base.Add(time.Minute)
+	recurrence.Stack = "run@https://example.com/app.js?v=3:10:2"
+	recurrence.ReceivedAt = base.Add(2 * time.Minute)
 	issue, err := database.Record(context.Background(), "project-a", recurrence)
 	if err != nil {
 		t.Fatalf("record v2 recurrence: %v", err)
@@ -103,8 +136,8 @@ VALUES (?, ?, ?, ?, ?)
 	if issue.Fingerprint != recurrence.Fingerprint() {
 		t.Fatalf("fingerprint = %q, want v2 %q", issue.Fingerprint, recurrence.Fingerprint())
 	}
-	if issue.Status != IssueStatusIgnored || issue.Occurrences != 8 {
-		t.Fatalf("migrated issue = %#v, want ignored with 8 occurrences", issue)
+	if issue.Status != IssueStatusIgnored || issue.Occurrences != 12 {
+		t.Fatalf("migrated issue = %#v, want ignored with 12 occurrences", issue)
 	}
 	if !issue.FirstSeen.Equal(base.Add(-time.Hour)) || issue.LastEvent.ID != recurrence.ID {
 		t.Fatalf("migrated issue timestamps/event = %#v", issue)
@@ -115,18 +148,25 @@ VALUES (?, ?, ?, ?, ?)
 	if err != nil {
 		t.Fatalf("list migrated history: %v", err)
 	}
-	if history.Total != 3 || len(history.Events) != 3 {
-		t.Fatalf("migrated history = %#v, want three retained events", history)
+	if history.Total != 4 || len(history.Events) != 4 {
+		t.Fatalf("migrated history = %#v, want four retained events", history)
+	}
+	for _, migrated := range []event.Event{first, second} {
+		if _, err := database.GetIssue(
+			context.Background(), "project-a", migrated.LegacyFingerprint(),
+		); !errors.Is(err, ErrIssueNotFound) {
+			t.Fatalf("legacy issue lookup error = %v, want ErrIssueNotFound", err)
+		}
 	}
 	if _, err := database.GetIssue(
-		context.Background(), "project-a", legacyFingerprint,
-	); !errors.Is(err, ErrIssueNotFound) {
-		t.Fatalf("legacy issue lookup error = %v, want ErrIssueNotFound", err)
+		context.Background(), "project-a", otherFrame.LegacyFingerprint(),
+	); err != nil {
+		t.Fatalf("unrelated v1 issue was migrated: %v", err)
 	}
 	var legacyEvents int
 	if err := database.db.QueryRow(
-		"SELECT COUNT(*) FROM events WHERE project_id = ? AND fingerprint = ?",
-		"project-a", legacyFingerprint,
+		"SELECT COUNT(*) FROM events WHERE project_id = ? AND fingerprint IN (?, ?)",
+		"project-a", first.LegacyFingerprint(), second.LegacyFingerprint(),
 	).Scan(&legacyEvents); err != nil {
 		t.Fatalf("count legacy events: %v", err)
 	}
