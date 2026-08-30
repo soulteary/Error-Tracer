@@ -678,6 +678,40 @@ test("flush waits for events queued during an active delivery", async () => {
   assert.equal(flushResolved, true);
 });
 
+test("flush reserves the events queued when it is called", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 1,
+    maxQueueSize: 1,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  const flush = client.flush();
+  assert.equal(await client.captureMessage("three"), true);
+  assert.equal(client.getStats().dropped, 0);
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  assert.equal(await flush, true);
+  await eventLoopTurn();
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three"],
+  );
+  assert.equal(client.getStats().dropped, 0);
+});
+
 test("retries failed batches with a finite budget", async () => {
   let attempts = 0;
   const runtime = {

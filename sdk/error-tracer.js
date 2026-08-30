@@ -383,20 +383,21 @@
     }
 
     flush() {
-      if (this.flushPromise) {
-        const active = this.flushPromise;
-        if (!this.queue.length) {
-          return active;
-        }
-        return active.then((accepted) =>
-          this.flush().then((drained) => accepted && drained));
-      }
       this.clearFlushTimer();
       if (!this.queue.length) {
-        return Promise.resolve(true);
+        return this.flushPromise || Promise.resolve(true);
       }
       const pending = this.queue.splice(0);
-      this.flushPromise = this.sendPending(pending).finally(() => {
+      const active = this.flushPromise;
+      const delivery = active
+        ? active.then((accepted) =>
+          this.sendPending(pending).then((drained) => accepted && drained))
+        : this.sendPending(pending);
+      let tracked;
+      tracked = delivery.finally(() => {
+        if (this.flushPromise !== tracked) {
+          return;
+        }
         this.flushPromise = null;
         if (this.queue.length >= this.batchSize) {
           this.settle(this.flush());
@@ -404,7 +405,8 @@
           this.scheduleFlush();
         }
       });
-      return this.flushPromise;
+      this.flushPromise = tracked;
+      return tracked;
     }
 
     sendPending(pending) {
