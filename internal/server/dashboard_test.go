@@ -20,7 +20,7 @@ func TestDashboardIndex(t *testing.T) {
 	body := response.Body.String()
 	for _, marker := range []string{
 		"<title>Error-Tracer</title>",
-		`id="token-form"`,
+		`id="token-form" method="post"`,
 		`id="language-select"`,
 		`id="demo-button"`,
 		`id="demo-banner"`,
@@ -32,10 +32,40 @@ func TestDashboardIndex(t *testing.T) {
 			t.Fatalf("dashboard index does not contain %q", marker)
 		}
 	}
+	tokenInput := regexp.MustCompile(`<input id="admin-token"[^>]*>`).FindString(body)
+	if tokenInput == "" {
+		t.Fatal("dashboard index does not contain the admin token input")
+	}
+	if strings.Contains(tokenInput, "name=") || strings.Contains(tokenInput, "minlength=") {
+		t.Fatalf("admin token input can leak or mis-validate the token: %s", tokenInput)
+	}
 	if got := response.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 	assertDashboardSecurityHeaders(t, response)
+}
+
+func TestDashboardClientGuardsAsyncState(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/assets/dashboard.js", nil)
+	response := httptest.NewRecorder()
+	newTestServer().Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+	client := response.Body.String()
+	for _, marker := range []string{
+		"if (!isHeaderSafeToken(token))",
+		"code < 0x21 || code > 0x7e",
+		"const session = beginSession();",
+		"request !== state.detailRequest",
+		"setStatusButtonsBusy(state.statusUpdating)",
+		"state.loading || state.cursorHistory.length === 0",
+	} {
+		if !strings.Contains(client, marker) {
+			t.Fatalf("dashboard client does not contain state guard %q", marker)
+		}
+	}
 }
 
 func TestDashboardAssets(t *testing.T) {

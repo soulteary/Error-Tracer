@@ -45,12 +45,12 @@
         <h1 id="login-title" data-i18n="login.title">See the failures your users cannot explain.</h1>
         <p data-i18n="login.body">Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.</p>
       </div>
-      <form class="token-form" id="token-form">
+      <form class="token-form" id="token-form" method="post">
         <label for="admin-token" data-i18n="login.tokenLabel">Admin token</label>
         <div class="token-row">
-          <input id="admin-token" name="admin-token" type="password" required minlength="24"
+          <input id="admin-token" type="password" required
                  autocomplete="off" autocapitalize="none" spellcheck="false"
-                 placeholder="Paste a 24+ character token" data-i18n-placeholder="login.tokenPlaceholder">
+                 placeholder="Paste a token containing at least 24 bytes" data-i18n-placeholder="login.tokenPlaceholder">
           <button class="button button-primary" type="submit" data-i18n="login.connect">Connect</button>
         </div>
         <button class="button button-demo" id="demo-button" type="button" hidden data-i18n="login.demo">Explore the read-only demo</button>

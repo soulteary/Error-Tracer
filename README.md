@@ -285,8 +285,8 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | No | `100` | Newest event rows retained per issue, from 1 to 1,000; lowering it trims existing history at startup |
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
-| `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
-| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token accepted temporarily during rotation |
+| `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 visible ASCII characters |
+| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token in the same visible-ASCII format, accepted temporarily during rotation |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion requests per minute per direct peer |
@@ -297,6 +297,10 @@ history rows in the same transaction that records new events.
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
+
+Admin tokens are carried in the HTTP `Authorization` header, so non-ASCII,
+whitespace, and control characters are rejected consistently by the service
+and dashboard.
 
 When retention is enabled, Error-Tracer removes expired issues at startup and
 then every 24 hours. Cleanup is scoped to the configured project, uses

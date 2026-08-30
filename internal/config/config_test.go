@@ -184,8 +184,8 @@ func TestFromEnvironmentRequiresAdminToken(t *testing.T) {
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "short")
 
 	_, err := FromEnvironment()
-	if err == nil || err.Error() != "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes" {
-		t.Fatalf("FromEnvironment() error = %v, want admin token byte-length error", err)
+	if err == nil || err.Error() != "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 visible ASCII characters" {
+		t.Fatalf("FromEnvironment() error = %v, want admin token format error", err)
 	}
 }
 
@@ -198,7 +198,7 @@ func TestFromEnvironmentValidatesPreviousAdminToken(t *testing.T) {
 		{
 			name:     "too short",
 			previous: "short",
-			want:     "ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 bytes",
+			want:     "ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 visible ASCII characters",
 		},
 		{
 			name:     "same as current",
@@ -219,16 +219,58 @@ func TestFromEnvironmentValidatesPreviousAdminToken(t *testing.T) {
 	}
 }
 
-func TestFromEnvironmentCountsCredentialBytes(t *testing.T) {
+func TestFromEnvironmentCountsIngestKeyBytes(t *testing.T) {
 	t.Setenv("ERROR_TRACER_INGEST_KEY", strings.Repeat("é", 8))
-	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", strings.Repeat("é", 12))
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
 
 	cfg, err := FromEnvironment()
 	if err != nil {
 		t.Fatalf("FromEnvironment() error = %v", err)
 	}
-	if len(cfg.IngestKey) != 16 || len(cfg.AdminToken) != 24 {
-		t.Fatalf("credential lengths = %d and %d bytes, want 16 and 24", len(cfg.IngestKey), len(cfg.AdminToken))
+	if len(cfg.IngestKey) != 16 {
+		t.Fatalf("ingest key length = %d bytes, want 16", len(cfg.IngestKey))
+	}
+}
+
+func TestFromEnvironmentRejectsHeaderUnsafeAdminTokens(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  string
+		previous string
+		want     string
+	}{
+		{
+			name:    "non-ASCII current",
+			current: strings.Repeat("界", 8),
+			want:    "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 visible ASCII characters",
+		},
+		{
+			name:    "whitespace in current",
+			current: strings.Repeat("a", 24) + " b",
+			want:    "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 visible ASCII characters",
+		},
+		{
+			name:    "control character in current",
+			current: strings.Repeat("a", 24) + "\x7f",
+			want:    "ERROR_TRACER_ADMIN_TOKEN must contain at least 24 visible ASCII characters",
+		},
+		{
+			name:     "non-ASCII previous",
+			current:  "0123456789abcdefghijklmn",
+			previous: strings.Repeat("界", 8),
+			want:     "ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 visible ASCII characters",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", test.current)
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS", test.previous)
+			_, err := FromEnvironment()
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("FromEnvironment() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

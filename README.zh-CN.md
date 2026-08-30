@@ -242,8 +242,8 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | 否 | `100` | 每问题保留的最新事件数，范围 1–1,000；调低后会在启动时裁剪既有历史 |
 | `ERROR_TRACER_PROJECT_ID` | 否 | `default` | 当前进程拥有的项目命名空间 |
 | `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
-| `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
-| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | 否 | 空 | 轮换期间临时接受的旧管理员令牌 |
+| `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 个非空白可见 ASCII 字符 |
+| `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | 否 | 空 | 与当前令牌格式相同、在轮换期间临时接受的旧管理员令牌 |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
 | `ERROR_TRACER_METRICS_ENABLED` | 否 | `false` | 在 `/metrics` 开放无鉴权 Prometheus 指标 |
 | `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟允许的采集请求数 |
@@ -254,6 +254,9 @@ Authorization: Bearer 替换为管理员令牌
 `ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。来源
 白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
 客户端仍可提交事件。
+
+管理员令牌通过 HTTP `Authorization` 请求头传输，因此服务端和 Dashboard
+都会拒绝非 ASCII 字符、空白及控制字符。
 
 启用保留策略后，Error-Tracer 会在启动时清理一次，之后每 24 小时清理一次。
 清理仅作用于当前项目、依据 `last_seen` 判断，并且每个事务最多删除 500 条；

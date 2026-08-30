@@ -15,11 +15,11 @@
       "login.title": "See the failures your users cannot explain.",
       "login.body": "Connect with the admin token configured on this Error-Tracer instance. The token stays in this tab's memory and is never persisted.",
       "login.tokenLabel": "Admin token",
-      "login.tokenPlaceholder": "Paste a 24+ character token",
+      "login.tokenPlaceholder": "Paste at least 24 visible ASCII characters",
       "login.connect": "Connect",
       "login.demo": "Explore the read-only demo",
       "login.noCredentials": "No credentials are stored by the dashboard.",
-      "login.tokenTooShort": "The admin token must contain at least 24 characters.",
+      "login.tokenInvalid": "The admin token must contain at least 24 visible ASCII characters.",
       "login.connecting": "Connecting…",
       "login.loadingDemo": "Loading the read-only demo…",
       "login.disconnected": "Disconnected. Paste the admin token to reconnect.",
@@ -103,11 +103,11 @@
       "login.title": "看见用户难以描述的故障。",
       "login.body": "使用当前 Error-Tracer 实例配置的管理员令牌连接。令牌只保存在此标签页的内存中，绝不会持久化。",
       "login.tokenLabel": "管理员令牌",
-      "login.tokenPlaceholder": "粘贴至少 24 个字符的令牌",
+      "login.tokenPlaceholder": "粘贴至少 24 个非空白可见 ASCII 字符",
       "login.connect": "连接",
       "login.demo": "查看只读演示",
       "login.noCredentials": "Dashboard 不会保存任何凭据。",
-      "login.tokenTooShort": "管理员令牌必须至少包含 24 个字符。",
+      "login.tokenInvalid": "管理员令牌必须至少包含 24 个非空白可见 ASCII 字符。",
       "login.connecting": "正在连接…",
       "login.loadingDemo": "正在加载只读演示…",
       "login.disconnected": "已断开。粘贴管理员令牌可重新连接。",
@@ -231,6 +231,10 @@
     page: null,
     selected: null,
     loading: false,
+    loadRequest: 0,
+    detailRequest: 0,
+    statusUpdating: false,
+    session: 0,
   };
 
   const messageRenderers = new Map();
@@ -245,10 +249,11 @@
   elements.tokenForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const token = elements.tokenInput.value.trim();
-    if (token.length < 24) {
-      showMessage(elements.loginMessage, message("login.tokenTooShort"), true);
+    if (!isHeaderSafeToken(token)) {
+      showMessage(elements.loginMessage, message("login.tokenInvalid"), true);
       return;
     }
+    const session = beginSession();
     updateDemoURL(false);
     state.demo = false;
     state.token = token;
@@ -257,14 +262,22 @@
     showMessage(elements.loginMessage, message("login.connecting"), false);
     try {
       await loadIssues();
+      if (!isCurrentSession(session)) {
+        return;
+      }
       elements.tokenInput.value = "";
       showWorkspace();
     } catch (error) {
+      if (!isCurrentSession(session)) {
+        return;
+      }
       state.token = "";
       showMessage(elements.loginMessage, () => readableError(error), true);
       elements.tokenInput.focus();
     } finally {
-      setLoginBusy(false);
+      if (isCurrentSession(session)) {
+        setLoginBusy(false);
+      }
     }
   });
 
@@ -273,6 +286,7 @@
   });
 
   async function enterDemo(updateURL) {
+    const session = beginSession();
     state.token = "";
     state.demo = true;
     state.status = "";
@@ -287,12 +301,20 @@
     showMessage(elements.loginMessage, message("login.loadingDemo"), false);
     try {
       await loadIssues();
+      if (!isCurrentSession(session)) {
+        return;
+      }
       showWorkspace();
     } catch (error) {
+      if (!isCurrentSession(session)) {
+        return;
+      }
       state.demo = false;
       showMessage(elements.loginMessage, () => readableError(error), true);
     } finally {
-      setLoginBusy(false);
+      if (isCurrentSession(session)) {
+        setLoginBusy(false);
+      }
     }
   }
 
@@ -351,6 +373,8 @@
     if (state.loading || (!state.token && !state.demo)) {
       return;
     }
+    const session = state.session;
+    const request = ++state.loadRequest;
     state.loading = true;
     setWorkspaceBusy(true);
     showMessage(elements.workspaceMessage, () => "", false);
@@ -362,25 +386,51 @@
       if (state.status) {
         query.set("status", state.status);
       }
-      state.page = await requestJSON(`/api/v1/issues?${query}`);
-      if (state.cursor && state.page.issues.length === 0 && state.cursorHistory.length > 0) {
+      let page = await requestJSON(`/api/v1/issues?${query}`);
+      if (!isCurrentLoad(session, request)) {
+        return;
+      }
+      if (state.cursor && page.issues.length === 0 && state.cursorHistory.length > 0) {
         state.cursor = state.cursorHistory.pop();
         state.pageIndex = Math.max(0, state.pageIndex - 1);
         query.set("cursor", state.cursor);
         if (!state.cursor) {
           query.delete("cursor");
         }
-        state.page = await requestJSON(`/api/v1/issues?${query}`);
+        page = await requestJSON(`/api/v1/issues?${query}`);
+        if (!isCurrentLoad(session, request)) {
+          return;
+        }
       }
+      state.page = page;
       renderPage(state.page);
+    } catch (error) {
+      if (isCurrentLoad(session, request)) {
+        throw error;
+      }
     } finally {
-      state.loading = false;
-      setWorkspaceBusy(false);
+      if (isCurrentLoad(session, request)) {
+        state.loading = false;
+        setWorkspaceBusy(false);
+      }
     }
   }
 
   async function openIssue(fingerprint) {
-    const result = await requestJSON(`/api/v1/issues/${encodeURIComponent(fingerprint)}`);
+    const session = state.session;
+    const request = ++state.detailRequest;
+    let result;
+    try {
+      result = await requestJSON(`/api/v1/issues/${encodeURIComponent(fingerprint)}`);
+    } catch (error) {
+      if (isCurrentSession(session) && request === state.detailRequest) {
+        throw error;
+      }
+      return;
+    }
+    if (!isCurrentSession(session) || request !== state.detailRequest) {
+      return;
+    }
     state.selected = result.issue;
     renderDetail(result.issue);
     if (typeof elements.dialog.showModal === "function") {
@@ -391,38 +441,55 @@
   }
 
   async function updateIssueStatus(status) {
-    if (!state.selected || state.selected.status === status) {
+    if (state.statusUpdating || !state.selected || state.selected.status === status) {
       return;
     }
     if (state.demo) {
       showMessage(elements.workspaceMessage, message("workspace.readOnly"), false);
       return;
     }
+    const session = state.session;
+    const fingerprint = state.selected.fingerprint;
+    state.statusUpdating = true;
     setStatusButtonsBusy(true);
     try {
       const result = await requestJSON(
         `/api/v1/issues/${encodeURIComponent(state.selected.fingerprint)}`,
         { method: "PATCH", body: JSON.stringify({ status }) },
       );
+      if (!isCurrentSession(session) || !state.selected ||
+          state.selected.fingerprint !== fingerprint) {
+        return;
+      }
       state.selected = result.issue;
       renderDetail(result.issue);
       await loadIssues();
+    } catch (error) {
+      if (isCurrentSession(session)) {
+        throw error;
+      }
     } finally {
-      setStatusButtonsBusy(false);
+      if (isCurrentSession(session)) {
+        state.statusUpdating = false;
+        setStatusButtonsBusy(false);
+      }
     }
   }
 
   async function requestJSON(path, options) {
     options = options || {};
+    const session = state.session;
+    const demo = state.demo;
+    const token = state.token;
     const headers = { Accept: "application/json" };
-    if (!state.demo) {
-      headers.Authorization = `Bearer ${state.token}`;
+    if (!demo) {
+      headers.Authorization = `Bearer ${token}`;
     }
     if (options.body) {
       headers["Content-Type"] = "application/json";
     }
 
-    const requestPath = state.demo
+    const requestPath = demo
       ? path.replace(/^\/api\/v1\/issues/, "/api/v1/demo/issues")
       : path;
 
@@ -439,7 +506,7 @@
     }
 
     const payload = await response.json().catch(() => ({}));
-    if (response.status === 401 && !state.demo) {
+    if (response.status === 401 && !demo && isCurrentSession(session)) {
       disconnect("login.tokenChanged");
       throw dashboardError("login.tokenRejected");
     }
@@ -474,8 +541,8 @@
     elements.pageCopy.textContent = t("issues.page", {
       page: integerFormat.format(state.pageIndex + 1),
     });
-    elements.previous.disabled = state.cursorHistory.length === 0;
-    elements.next.disabled = !page.next_cursor;
+    elements.previous.disabled = state.loading || state.cursorHistory.length === 0;
+    elements.next.disabled = state.loading || !page.next_cursor;
   }
 
   function issueRow(issue) {
@@ -544,7 +611,7 @@
     for (const button of elements.statusActions.querySelectorAll("[data-status]")) {
       button.setAttribute("aria-pressed", String(button.dataset.status === issue.status));
     }
-    setStatusButtonsBusy(false);
+    setStatusButtonsBusy(state.statusUpdating);
   }
 
   function appendContext(label, value) {
@@ -581,6 +648,7 @@
   }
 
   function disconnect(messageKey) {
+    beginSession();
     state.token = "";
     state.demo = false;
     state.status = "";
@@ -596,6 +664,9 @@
     updateConnectionLabel();
     elements.loginPanel.hidden = false;
     elements.tokenInput.value = "";
+    setLoginBusy(false);
+    setWorkspaceBusy(false);
+    setStatusButtonsBusy(false);
     showMessage(elements.loginMessage, message(messageKey), false);
     elements.tokenInput.focus();
   }
@@ -653,6 +724,21 @@
     state.pageIndex = 0;
   }
 
+  function beginSession() {
+    state.session++;
+    state.loading = false;
+    state.statusUpdating = false;
+    return state.session;
+  }
+
+  function isCurrentSession(session) {
+    return session === state.session;
+  }
+
+  function isCurrentLoad(session, request) {
+    return isCurrentSession(session) && request === state.loadRequest;
+  }
+
   function setStatusButtonsBusy(busy) {
     for (const button of elements.statusActions.querySelectorAll("button")) {
       button.disabled = busy || state.demo;
@@ -673,6 +759,20 @@
 
   function safeStatus(status) {
     return ["open", "resolved", "ignored"].includes(status) ? status : "open";
+  }
+
+  function isHeaderSafeToken(value) {
+    value = String(value || "");
+    if (value.length < 24) {
+      return false;
+    }
+    for (let index = 0; index < value.length; index++) {
+      const code = value.charCodeAt(index);
+      if (code < 0x21 || code > 0x7e) {
+        return false;
+      }
+    }
+    return true;
   }
 
   function statusLabel(status) {

@@ -69,12 +69,12 @@ func FromEnvironment() (Config, error) {
 		return Config{}, errors.New("ERROR_TRACER_INGEST_KEY must contain at least 16 bytes")
 	}
 	adminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN"))
-	if len(adminToken) < 24 {
-		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 bytes")
+	if len(adminToken) < 24 || !isPrintableASCII(adminToken) {
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN must contain at least 24 visible ASCII characters")
 	}
 	previousAdminToken := strings.TrimSpace(os.Getenv("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS"))
-	if previousAdminToken != "" && len(previousAdminToken) < 24 {
-		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 bytes")
+	if previousAdminToken != "" && (len(previousAdminToken) < 24 || !isPrintableASCII(previousAdminToken)) {
+		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must be empty or contain at least 24 visible ASCII characters")
 	}
 	if previousAdminToken != "" && previousAdminToken == adminToken {
 		return Config{}, errors.New("ERROR_TRACER_ADMIN_TOKEN_PREVIOUS must differ from ERROR_TRACER_ADMIN_TOKEN")
@@ -121,6 +121,15 @@ func FromEnvironment() (Config, error) {
 		DemoMode:                 demoMode,
 		RetentionDays:            retentionDays,
 	}, nil
+}
+
+func isPrintableASCII(value string) bool {
+	for index := 0; index < len(value); index++ {
+		if value[index] < 0x21 || value[index] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // DatabasePathFromEnvironment returns the configured SQLite path without
