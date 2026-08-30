@@ -93,18 +93,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          node-version: "24"
+          bun-version-file: .bun-version
 
       - name: Check JavaScript syntax
-        run: |
-          node --check sdk/error-tracer.js
-          node --check internal/server/dashboard/dashboard.js
+        run: >-
+          bun build sdk/error-tracer.js internal/server/dashboard/dashboard.js
+          --target=browser --outdir=/tmp/error-tracer-js
 
       - name: Test browser SDK
-        run: node --test sdk/*.test.js
+        run: bun test sdk/*.test.js
 
   container:
     name: Container smoke

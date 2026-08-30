@@ -5,11 +5,12 @@
   "description": "A small self-hosted browser error collector",
   "license": "Apache-2.0",
   "type": "commonjs",
+  "packageManager": "bun@1.4.0",
   "scripts": {
-    "check:docs": "node scripts/check-doc-links.mjs",
-    "test": "node --test sdk/*.test.js"
+    "check:docs": "bun scripts/check-doc-links.mjs",
+    "test": "bun test sdk/*.test.js"
   },
   "engines": {
-    "node": ">=22"
+    "bun": ">=1.4.0"
   }
 }

@@ -353,16 +353,16 @@ role-based access control.
 
 ## Local development
 
-The module declares Go 1.27. Node.js 22 or newer is needed only for browser SDK
-tests.
+The module declares Go 1.27. Bun 1.4.0 or newer is needed for browser SDK tests
+and documentation checks.
 
 ```sh
 go mod verify
 go vet ./...
 go test ./...
 go test -race ./...
-npm test
-npm run check:docs
+bun test
+bun run check:docs
 ```
 
 Performance and capacity checks are opt-in. See
