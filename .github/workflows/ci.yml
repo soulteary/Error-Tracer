@@ -104,7 +104,7 @@ jobs:
           --target=browser --outdir=/tmp/error-tracer-js
 
       - name: Test browser SDK
-        run: bun test sdk/*.test.js
+        run: bun test sdk/*.test.js scripts/*.test.mjs
 
   container:
     name: Container smoke

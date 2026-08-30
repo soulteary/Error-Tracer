@@ -6,17 +6,11 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const markdownFiles = execFileSync("git", ["ls-files", "-z", "*.md"], {
-  cwd: repositoryRoot,
-  encoding: "utf8",
-}).split("\0").filter(Boolean);
-const failures = [];
+const scriptPath = fileURLToPath(import.meta.url);
 
-for (const markdownFile of markdownFiles) {
-  const contents = withoutFencedCode(readFileSync(resolve(repositoryRoot, markdownFile), "utf8"));
-  const links = contents.matchAll(/!?\[[^\]\n]*\]\((<[^>\n]+>|[^\s)]+)(?:\s+[^)]*)?\)/g);
-  for (const match of links) {
-    const rawTarget = match[1].replace(/^<|>$/g, "");
+export function checkMarkdownLinks(root, markdownFile, contents) {
+  const failures = [];
+  for (const rawTarget of markdownTargets(contents)) {
     if (isExternal(rawTarget)) {
       continue;
     }
@@ -31,9 +25,9 @@ for (const markdownFile of markdownFiles) {
       continue;
     }
     const resolvedTarget = target.startsWith("/")
-      ? resolve(repositoryRoot, target.slice(1))
-      : resolve(repositoryRoot, dirname(markdownFile), target);
-    const repositoryRelative = relative(repositoryRoot, resolvedTarget);
+      ? resolve(root, target.slice(1))
+      : resolve(root, dirname(markdownFile), target);
+    const repositoryRelative = relative(root, resolvedTarget);
     if (repositoryRelative.startsWith("..") || isAbsolute(repositoryRelative)) {
       failures.push(`${markdownFile}: link escapes the repository: ${rawTarget}`);
       continue;
@@ -42,13 +36,23 @@ for (const markdownFile of markdownFiles) {
       failures.push(`${markdownFile}: missing link target: ${rawTarget}`);
     }
   }
+  return failures;
 }
 
-if (failures.length) {
-  process.stderr.write(`${failures.join("\n")}\n`);
-  process.exitCode = 1;
-} else {
-  process.stdout.write(`Checked ${markdownFiles.length} Markdown files.\n`);
+export function markdownTargets(contents) {
+  const markdown = withoutFencedCode(contents);
+  const targets = [];
+  for (const match of markdown.matchAll(
+    /!?\[[^\]\n]*\]\((<[^>\n]+>|[^\s)]+)(?:\s+[^)]*)?\)/g,
+  )) {
+    targets.push(match[1].replace(/^<|>$/g, ""));
+  }
+  for (const match of markdown.matchAll(
+    /^[ \t]{0,3}\[(?!\^)[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]{0,3})?(?:<([^>\n]+)>|([^\s]+))/gm,
+  )) {
+    targets.push(match[1] || match[2]);
+  }
+  return targets;
 }
 
 function isExternal(target) {
@@ -69,4 +73,27 @@ function withoutFencedCode(contents) {
     }
     return fence ? "" : line;
   }).join("\n");
+}
+
+function run() {
+  const markdownFiles = execFileSync("git", ["ls-files", "-z", "*.md"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  }).split("\0").filter(Boolean);
+  const failures = markdownFiles.flatMap((markdownFile) => checkMarkdownLinks(
+    repositoryRoot,
+    markdownFile,
+    readFileSync(resolve(repositoryRoot, markdownFile), "utf8"),
+  ));
+
+  if (failures.length) {
+    process.stderr.write(`${failures.join("\n")}\n`);
+    process.exitCode = 1;
+  } else {
+    process.stdout.write(`Checked ${markdownFiles.length} Markdown files.\n`);
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
+  run();
 }
