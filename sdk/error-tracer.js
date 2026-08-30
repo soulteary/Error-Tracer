@@ -428,9 +428,15 @@
         this.stats.failed += grouped.rejected;
         this.stats.dropped += grouped.rejected;
       }
+
+      if (!reserved) {
+        for (const events of grouped.batches.slice(1)) {
+          this.reservedCount += events.length;
+        }
+      }
       return grouped.batches.reduce(
-        (result, events) => result.then((accepted) => {
-          if (reserved) {
+        (result, events, index) => result.then((accepted) => {
+          if (reserved || index > 0) {
             this.reservedCount -= events.length;
           }
           return this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted);

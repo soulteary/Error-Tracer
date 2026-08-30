@@ -862,6 +862,49 @@ test("keeps unsent sub-batches reserved behind a stalled sub-batch", async () =>
   });
 });
 
+test("keeps initial unsent sub-batches reserved behind a stalled sub-batch", async () => {
+  let releaseFirst;
+  const firstDelivery = new Promise((resolve) => { releaseFirst = resolve; });
+  const payloads = [];
+  const client = testClient({
+    batchSize: 3,
+    maxQueueSize: 3,
+    maxBatchBytes: 1024,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+  const large = (label) => `${label}:${"x".repeat(700)}`;
+  const messages = ["one", "two", "three", "four", "five", "six"].map(large);
+
+  assert.equal(await client.captureMessage(messages[0]), true);
+  assert.equal(await client.captureMessage(messages[1]), true);
+  const initialFlush = client.captureMessage(messages[2]);
+  await eventLoopTurn();
+  assert.deepEqual(payloads.map((payload) => payload.events.length), [1]);
+  assert.equal(client.getStats().queued, 2);
+
+  for (const message of messages.slice(3)) {
+    assert.equal(await client.captureMessage(message), true);
+  }
+  assert.deepEqual(client.getStats(), {
+    queued: 3, sent: 0, dropped: 2, failed: 0, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await initialFlush, true);
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    [messages[0], messages[1], messages[2], messages[5]],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 4, dropped: 2, failed: 0, batches: 4, retries: 0,
+  });
+});
+
 test("retries failed batches with a finite budget", async () => {
   let attempts = 0;
   const runtime = {
