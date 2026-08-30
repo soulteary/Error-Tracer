@@ -214,7 +214,8 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
     const list = listMarkerPrefix(remaining);
     if (list) {
       if ((list.empty ||
-           (list.orderedStart !== null && list.orderedStart !== 1)) &&
+           (list.orderedStart !== null && list.orderedStart !== 1) ||
+           stripIndent(remaining.slice(list.length), 4) !== null) &&
           orderedListCanInterrupt && !orderedListCanInterrupt(containers)) {
         return { content: remaining, containers };
       }
@@ -238,6 +239,7 @@ function parseContinuedBlockContainers(
   orderedListCanInterrupt,
 ) {
   const continued = blockContainerPrefix(line, activeContainers);
+  const startsSiblingListItem = startsNewListItem(line, activeContainers);
   let containers = activeContainers.slice(0, continued.count);
   let content = continued.content;
   if (continued.count < activeContainers.length && activeParagraphOpen &&
@@ -254,6 +256,7 @@ function parseContinuedBlockContainers(
   }
 
   const nested = parseBlockContainers(content, (nestedContainers) =>
+    startsSiblingListItem ||
     orderedListCanInterrupt([...containers, ...nestedContainers]));
   return {
     content: nested.content,

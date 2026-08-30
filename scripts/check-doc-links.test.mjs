@@ -274,6 +274,17 @@ test("keeps indented lazy paragraph continuations visible", () => {
   ].join("\n")), ["docs/inline.md"]);
 });
 
+test("keeps noninterrupting list-like code in paragraphs visible", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "-     [unordered](docs/unordered.md)",
+    "Another paragraph",
+    "1.     [ordered](docs/ordered.md)",
+    "",
+    "-     [code](docs/not-visible.md)",
+  ].join("\n")), ["docs/unordered.md", "docs/ordered.md"]);
+});
+
 test("keeps indented list continuations visible", () => {
   assert.deepEqual(markdownTargets([
     "- List item",
