@@ -127,7 +127,9 @@ function stripBlockContainers(line) {
       remaining = remaining.slice(quote[0].length);
       continue;
     }
-    const list = remaining.match(/^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])[ \t]+/);
+    const list = remaining.match(
+      /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])(?: {1,4}(?![ \t])|\t)/,
+    );
     if (list) {
       remaining = remaining.slice(list[0].length);
       continue;
@@ -143,7 +145,7 @@ function isExternal(target) {
 function withoutFencedCode(contents) {
   let fence = "";
   return contents.split("\n").map((line) => {
-    const marker = line.match(/^\s*(```+|~~~+)/)?.[1] || "";
+    const marker = stripBlockContainers(line).match(/^\s*(```+|~~~+)/)?.[1] || "";
     if (marker && !fence) {
       fence = marker[0];
       return "";

@@ -32,6 +32,20 @@ test("ignores reference definitions in fenced code", () => {
   ].join("\n")), []);
 });
 
+test("ignores fenced code nested in block containers", () => {
+  assert.deepEqual(markdownTargets([
+    "> ```markdown",
+    "> [quoted]: docs/quoted-missing.md",
+    "> ```",
+    "- ~~~markdown",
+    "  [listed]: docs/listed-missing.md",
+    "  ~~~",
+    "> - ```markdown",
+    ">   [nested]: docs/nested-missing.md",
+    ">   ```",
+  ].join("\n")), []);
+});
+
 test("ignores GitHub footnote definitions", () => {
   assert.deepEqual(markdownTargets([
     "A statement with a footnote.[^1]",
@@ -57,6 +71,13 @@ test("extracts definitions nested in block containers", () => {
     "docs/listed.md",
     "docs/nested.md",
   ]);
+});
+
+test("ignores indented code after list markers", () => {
+  assert.deepEqual(markdownTargets([
+    "-     [unordered]: docs/unordered-missing.md",
+    "1.     [ordered]: docs/ordered-missing.md",
+  ].join("\n")), []);
 });
 
 test("extracts reference destinations continued on the next line", () => {
