@@ -290,10 +290,20 @@
       } catch (_) {
         return Promise.resolve(false);
       }
+      captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
+
+      const singleBody = safeSerialize({
+        project_key: this.projectKey,
+        events: [captured],
+      });
+      if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
+        this.stats.failed++;
+        this.stats.dropped++;
+        return Promise.resolve(false);
+      }
       if (!this.consumeBudget(now.getTime())) {
         return Promise.resolve(false);
       }
-      captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
 
       this.enqueue(captured);
       if (this.queue.length >= this.batchSize) {

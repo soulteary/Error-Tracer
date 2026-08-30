@@ -194,7 +194,10 @@ func sanitizeURL(value string) string {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return value
+		// Never persist an unparseable client-controlled URL. In particular,
+		// malformed percent escapes can otherwise preserve userinfo, queries,
+		// and fragments that the normal parsed path removes.
+		return ""
 	}
 	parsed.User = nil
 	parsed.RawQuery = ""

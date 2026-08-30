@@ -266,6 +266,53 @@ func TestIngestEventRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestIngestEndpointsRejectOversizedTrailingData(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		body      string
+		limit     int
+		wantError string
+	}{
+		{
+			name:      "single event",
+			path:      "/api/v1/events",
+			body:      `{"project_key":"0123456789abcdef","event":{"kind":"error","message":"boom"}}`,
+			limit:     maxEventBodySize,
+			wantError: "event_too_large",
+		},
+		{
+			name:      "event batch",
+			path:      "/api/v1/events/batch",
+			body:      `{"project_key":"0123456789abcdef","events":[{"kind":"error","message":"boom"}]}`,
+			limit:     maxBatchBodySize,
+			wantError: "batch_too_large",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := test.body + strings.Repeat(" ", test.limit)
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			newTestServer().Handler().ServeHTTP(response, request)
+
+			if response.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want %d; body = %s", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
+			}
+			var result errorResponse
+			if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if result.Error != test.wantError {
+				t.Fatalf("error = %q, want %q", result.Error, test.wantError)
+			}
+		})
+	}
+}
+
 func TestIngestEventRejectsUnconfiguredServer(t *testing.T) {
 	app := New(Options{})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(`{}`))

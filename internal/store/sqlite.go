@@ -110,6 +110,11 @@ WHERE sequence IN (
 )
 `
 
+const (
+	sqliteHistoryReconcileGroupBatch = 100
+	sqliteIssueCursorPredicate       = " AND last_seen <= ? AND (last_seen < ? OR (last_seen = ? AND fingerprint > ?))"
+)
+
 var (
 	ErrDatabasePathRequired = errors.New("database path is required")
 	ErrBackupPathRequired   = errors.New("backup path is required")
@@ -213,13 +218,31 @@ func OpenSQLiteWithOptions(ctx context.Context, path string, options SQLiteOptio
 	if err := migrateSQLite(ctx, database, sqliteMigrations); err != nil {
 		return fail("migrate sqlite database", err)
 	}
+	if err := reconcileSQLiteEventHistory(ctx, database, maxEvents); err != nil {
+		return fail("reconcile sqlite event history", err)
+	}
 
 	return &SQLite{db: database, maxEventsPerIssue: maxEvents}, nil
 }
 
 func migrateSQLite(ctx context.Context, database *sql.DB, migrations []sqliteMigration) error {
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration connection: %w", err)
+	}
+	defer connection.Close()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin immediate migration transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
 	var currentVersion int
-	if err := database.QueryRowContext(ctx, "PRAGMA user_version").Scan(&currentVersion); err != nil {
+	if err := connection.QueryRowContext(ctx, "PRAGMA user_version").Scan(&currentVersion); err != nil {
 		return fmt.Errorf("read schema version: %w", err)
 	}
 	latestVersion := 0
@@ -240,26 +263,92 @@ func migrateSQLite(ctx context.Context, database *sql.DB, migrations []sqliteMig
 				currentVersion, migration.version,
 			)
 		}
-		transaction, err := database.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin migration %d (%s): %w", migration.version, migration.name, err)
-		}
-		if _, err := transaction.ExecContext(ctx, migration.schema); err != nil {
-			_ = transaction.Rollback()
+		if _, err := connection.ExecContext(ctx, migration.schema); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", migration.version, migration.name, err)
 		}
-		if _, err := transaction.ExecContext(
+		if _, err := connection.ExecContext(
 			ctx, fmt.Sprintf("PRAGMA user_version = %d", migration.version),
 		); err != nil {
-			_ = transaction.Rollback()
 			return fmt.Errorf("record migration %d (%s): %w", migration.version, migration.name, err)
-		}
-		if err := transaction.Commit(); err != nil {
-			return fmt.Errorf("commit migration %d (%s): %w", migration.version, migration.name, err)
 		}
 		currentVersion = migration.version
 	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit SQLite migrations: %w", err)
+	}
+	committed = true
 	return nil
+}
+
+func reconcileSQLiteEventHistory(ctx context.Context, database *sql.DB, maximum int) error {
+	var afterProject, afterFingerprint string
+	hasCursor := false
+	for {
+		whereClause := ""
+		arguments := make([]any, 0, 4)
+		if hasCursor {
+			whereClause = "WHERE (project_id, fingerprint) > (?, ?)"
+			arguments = append(arguments, afterProject, afterFingerprint)
+		}
+		arguments = append(arguments, maximum, sqliteHistoryReconcileGroupBatch)
+		rows, err := database.QueryContext(ctx, `
+SELECT project_id, fingerprint
+FROM events
+`+whereClause+`
+GROUP BY project_id, fingerprint
+HAVING COUNT(*) > ?
+ORDER BY project_id ASC, fingerprint ASC
+LIMIT ?
+`, arguments...)
+		if err != nil {
+			return fmt.Errorf("find oversized event histories: %w", err)
+		}
+		type issueKey struct {
+			projectID   string
+			fingerprint string
+		}
+		groups := make([]issueKey, 0, sqliteHistoryReconcileGroupBatch)
+		for rows.Next() {
+			var group issueKey
+			if err := rows.Scan(&group.projectID, &group.fingerprint); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan oversized event history: %w", err)
+			}
+			groups = append(groups, group)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("iterate oversized event histories: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close oversized event histories: %w", err)
+		}
+		if len(groups) == 0 {
+			return nil
+		}
+
+		transaction, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin event history reconciliation: %w", err)
+		}
+		for _, group := range groups {
+			if _, err := transaction.ExecContext(
+				ctx, sqliteTrimEvents, group.projectID, group.fingerprint, maximum,
+			); err != nil {
+				_ = transaction.Rollback()
+				return fmt.Errorf(
+					"trim event history for %s/%s: %w",
+					group.projectID, group.fingerprint, err,
+				)
+			}
+		}
+		if err := transaction.Commit(); err != nil {
+			return fmt.Errorf("commit event history reconciliation: %w", err)
+		}
+		last := groups[len(groups)-1]
+		afterProject, afterFingerprint = last.projectID, last.fingerprint
+		hasCursor = true
+	}
 }
 
 func sqliteDataSourceName(path string, connections int) string {
@@ -315,17 +404,21 @@ func (s *SQLite) Close() error {
 	return s.db.Close()
 }
 
-// Ready verifies that the connection pool can execute a lightweight read.
+// Ready verifies that the connection pool can read the required schema.
 func (s *SQLite) Ready(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("SQLite database is unavailable")
 	}
-	var value int
-	if err := s.db.QueryRowContext(ctx, "SELECT 1").Scan(&value); err != nil {
+	var tables int
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM sqlite_schema
+WHERE type = 'table' AND name IN ('issues', 'events')
+`).Scan(&tables); err != nil {
 		return fmt.Errorf("probe sqlite database: %w", err)
 	}
-	if value != 1 {
-		return fmt.Errorf("probe sqlite database: returned %d, want 1", value)
+	if tables != 2 {
+		return fmt.Errorf("probe sqlite database: found %d of 2 required tables", tables)
 	}
 	return nil
 }
@@ -572,10 +665,10 @@ func (s *SQLite) ListIssues(ctx context.Context, projectID string, options ListO
 		return IssuePage{}, fmt.Errorf("count issues: %w", err)
 	}
 	if options.After != nil {
-		whereClause += " AND (last_seen < ? OR (last_seen = ? AND fingerprint > ?))"
+		whereClause += sqliteIssueCursorPredicate
 		lastSeen := options.After.LastSeen.UnixNano()
 		queryArguments = append(
-			queryArguments, lastSeen, lastSeen, options.After.Fingerprint,
+			queryArguments, lastSeen, lastSeen, lastSeen, options.After.Fingerprint,
 		)
 	}
 

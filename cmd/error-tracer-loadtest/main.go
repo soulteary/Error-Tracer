@@ -282,16 +282,25 @@ func runLoad(ctx context.Context, configuration loadConfig) (loadSummary, error)
 
 				requestStarted := time.Now()
 				response, requestErr := client.Do(request)
-				latency := time.Since(requestStarted)
 				if requestErr != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					results <- observation{
+						latency: time.Since(requestStarted), transport: true,
+					}
+					continue
+				}
+				_, readErr := io.Copy(io.Discard, response.Body)
+				closeErr := response.Body.Close()
+				latency := time.Since(requestStarted)
+				if readErr != nil || closeErr != nil {
 					if ctx.Err() != nil {
 						return
 					}
 					results <- observation{latency: latency, transport: true}
 					continue
 				}
-				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64*1024))
-				_ = response.Body.Close()
 				results <- observation{status: response.StatusCode, latency: latency}
 			}
 		}()

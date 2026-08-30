@@ -2,12 +2,70 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRunLoadCountsTruncatedResponsesAsTransportErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Length", "100")
+		response.WriteHeader(http.StatusAccepted)
+		_, _ = response.Write([]byte("{}"))
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	summary, err := runLoad(ctx, testLoadConfig(server.URL))
+	if err != nil {
+		t.Fatalf("run load: %v", err)
+	}
+	if summary.transportErrors != 1 || summary.accepted != 0 {
+		t.Fatalf("summary = %#v, want one transport error and no accepted responses", summary)
+	}
+}
+
+func TestRunLoadMeasuresResponseBodyCompletion(t *testing.T) {
+	const bodyDelay = 60 * time.Millisecond
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusAccepted)
+		response.(http.Flusher).Flush()
+		time.Sleep(bodyDelay)
+		_, _ = response.Write([]byte("{}"))
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	summary, err := runLoad(ctx, testLoadConfig(server.URL))
+	if err != nil {
+		t.Fatalf("run load: %v", err)
+	}
+	if summary.accepted != 1 {
+		t.Fatalf("accepted = %d, want 1", summary.accepted)
+	}
+	if summary.latency.max < bodyDelay {
+		t.Fatalf("maximum latency = %s, want at least %s", summary.latency.max, bodyDelay)
+	}
+}
+
+func testLoadConfig(endpoint string) loadConfig {
+	return loadConfig{
+		endpoint:       endpoint,
+		projectKey:     "0123456789abcdef",
+		timeout:        time.Second,
+		concurrency:    1,
+		batchSize:      1,
+		cardinality:    1,
+		requestsPerSec: 1,
+	}
+}
 
 func TestParseConfigUsesEnvironmentKeyAndNormalizesTarget(t *testing.T) {
 	configuration, err := parseConfig(

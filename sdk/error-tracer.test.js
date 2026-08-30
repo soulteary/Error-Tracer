@@ -609,6 +609,41 @@ test("bounds the queue while another batch is in flight", async () => {
   });
 });
 
+test("rejects an oversized event before it can evict queued events", async () => {
+  let releaseFirst;
+  const payloads = [];
+  const firstDelivery = new Promise((resolve) => {
+    releaseFirst = resolve;
+  });
+  const client = testClient({
+    batchSize: 1,
+    maxQueueSize: 2,
+    maxBatchBytes: 1024,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return payloads.length === 1 ? firstDelivery : true;
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  assert.equal(await client.captureMessage("three"), true);
+  assert.equal(await client.captureMessage("x".repeat(2000)), false);
+  assert.deepEqual(client.getStats(), {
+    queued: 2, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  await eventLoopTurn();
+  assert.equal(await client.flush(), true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two", "three"],
+  );
+});
+
 test("flush waits for events queued during an active delivery", async () => {
   let releaseFirst;
   let releaseSecond;
