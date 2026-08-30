@@ -46,6 +46,41 @@ test("ignores fenced code nested in block containers", () => {
   ].join("\n")), []);
 });
 
+test("keeps longer container fences open past shorter marker runs", () => {
+  assert.deepEqual(markdownTargets([
+    "> ````markdown",
+    "> ```",
+    "> [missing]: docs/still-fenced.md",
+    "> ````",
+  ].join("\n")), []);
+});
+
+test("ends unclosed fences at their container boundary", () => {
+  assert.deepEqual(markdownTargets([
+    "> ```markdown",
+    "> quoted code",
+    "",
+    "[after-quote]: docs/after-quote.md",
+    "- ~~~markdown",
+    "  listed code",
+    "",
+    "[after-list]: docs/after-list.md",
+  ].join("\n")), [
+    "docs/after-quote.md",
+    "docs/after-list.md",
+  ]);
+});
+
+test("keeps a list fence open across an unindented blank line", () => {
+  assert.deepEqual(markdownTargets([
+    "- ```markdown",
+    "  listed code",
+    "",
+    "  [missing]: docs/still-in-list-fence.md",
+    "  ```",
+  ].join("\n")), []);
+});
+
 test("ignores GitHub footnote definitions", () => {
   assert.deepEqual(markdownTargets([
     "A statement with a footnote.[^1]",
@@ -86,9 +121,15 @@ test("extracts reference destinations continued on the next line", () => {
     "  docs/guide.md",
     "[wrapped]:",
     "   <docs/wrapped.md> \"Wrapped guide\"",
+    "10. [ordered]:",
+    "    docs/ordered.md",
+    "> 10. [nested]:",
+    ">     docs/nested-ordered.md",
   ].join("\n")), [
     "docs/guide.md",
     "docs/wrapped.md",
+    "docs/ordered.md",
+    "docs/nested-ordered.md",
   ]);
 });
 

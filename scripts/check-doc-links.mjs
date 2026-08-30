@@ -59,8 +59,8 @@ export function markdownTargets(contents) {
 }
 
 function referenceDefinitionAt(lines, index) {
-  const line = stripBlockContainers(lines[index]);
-  const match = line.match(
+  const parsedLine = parseBlockContainers(lines[index]);
+  const match = parsedLine.content.match(
     /^[ \t]{0,3}\[(?!\^)((?:\\.|[^\]\\\n])+)\]:[ \t]*(.*)$/,
   );
   if (!match) {
@@ -73,7 +73,12 @@ function referenceDefinitionAt(lines, index) {
     if (index + 1 >= lines.length) {
       return null;
     }
-    const continuation = stripBlockContainers(lines[index + 1]);
+    const continuation = continueBlockContainers(
+      lines[index + 1], parsedLine.containers,
+    );
+    if (continuation === null) {
+      return null;
+    }
     if (/^[ \t]{0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(continuation)) {
       return null;
     }
@@ -119,12 +124,14 @@ function referenceTitle(value) {
   return /^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\((?:\\.|[^)\\])*\))$/.test(value);
 }
 
-function stripBlockContainers(line) {
+function parseBlockContainers(line) {
   let remaining = line.replace(/\r$/, "");
+  const containers = [];
   while (true) {
     const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
     if (quote) {
       remaining = remaining.slice(quote[0].length);
+      containers.push({ type: "quote" });
       continue;
     }
     const list = remaining.match(
@@ -132,10 +139,54 @@ function stripBlockContainers(line) {
     );
     if (list) {
       remaining = remaining.slice(list[0].length);
+      containers.push({ type: "list", indent: indentationWidth(list[0]) });
       continue;
     }
-    return remaining;
+    return { content: remaining, containers };
   }
+}
+
+function continueBlockContainers(line, containers) {
+  let remaining = line.replace(/\r$/, "");
+  for (const container of containers) {
+    if (container.type === "quote") {
+      const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+      if (!quote) {
+        return null;
+      }
+      remaining = remaining.slice(quote[0].length);
+      continue;
+    }
+    remaining = stripIndent(remaining, container.indent);
+    if (remaining === null) {
+      return null;
+    }
+  }
+  return remaining;
+}
+
+function indentationWidth(value) {
+  let column = 0;
+  for (const character of value) {
+    column = character === "\t" ? column + 4 - (column % 4) : column + 1;
+  }
+  return column;
+}
+
+function stripIndent(line, width) {
+  let column = 0;
+  let index = 0;
+  while (index < line.length && column < width) {
+    if (line[index] === " ") {
+      column++;
+    } else if (line[index] === "\t") {
+      column += 4 - (column % 4);
+    } else {
+      return null;
+    }
+    index++;
+  }
+  return column < width ? null : `${" ".repeat(column - width)}${line.slice(index)}`;
 }
 
 function isExternal(target) {
@@ -143,18 +194,34 @@ function isExternal(target) {
 }
 
 function withoutFencedCode(contents) {
-  let fence = "";
+  let fence = null;
   return contents.split("\n").map((line) => {
-    const marker = stripBlockContainers(line).match(/^\s*(```+|~~~+)/)?.[1] || "";
-    if (marker && !fence) {
-      fence = marker[0];
+    if (fence) {
+      const content = continueBlockContainers(line, fence.containers);
+      if (content !== null) {
+        const closing = content.match(/^[ \t]{0,3}(`+|~+)[ \t]*$/)?.[1] || "";
+        if (closing[0] === fence.character && closing.length >= fence.length) {
+          fence = null;
+        }
+        return "";
+      }
+      if (!line.trim() && !fence.containers.some(({ type }) => type === "quote")) {
+        return "";
+      }
+      fence = null;
+    }
+
+    const parsed = parseBlockContainers(line);
+    const opening = parsed.content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+    if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
+      fence = {
+        character: opening[1][0],
+        length: opening[1].length,
+        containers: parsed.containers,
+      };
       return "";
     }
-    if (marker && fence === marker[0]) {
-      fence = "";
-      return "";
-    }
-    return fence ? "" : line;
+    return line;
   }).join("\n");
 }
 
