@@ -393,6 +393,53 @@ test("capture rejects serialized bodies without the expected envelope", async ()
   assert.equal(transports, 0);
 });
 
+test("retries events when grouping serialization temporarily fails", async () => {
+  const original = JSON.stringify;
+  const payloads = [];
+  let retryCallback;
+  const client = testClient({
+    runtime: {
+      location: { href: "https://app.example/page" },
+      setTimeout(callback) {
+        retryCallback = callback;
+        return 1;
+      },
+      clearTimeout() {},
+    },
+    batchSize: 3,
+    flushInterval: 0,
+    retryBaseDelay: 1,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+  assert.equal(await client.captureMessage("one"), true);
+  assert.equal(await client.captureMessage("two"), true);
+
+  let delivery;
+  try {
+    JSON.stringify = () => { throw new Error("temporarily unavailable"); };
+    delivery = client.flush();
+    await eventLoopTurn();
+    const releaseRetry = retryCallback;
+    JSON.stringify = original;
+    assert.equal(typeof releaseRetry, "function");
+    releaseRetry();
+  } finally {
+    JSON.stringify = original;
+  }
+
+  assert.equal(await delivery, true);
+  assert.deepEqual(
+    payloads.flatMap((payload) => payload.events.map((event) => event.message)),
+    ["one", "two"],
+  );
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 2, dropped: 0, failed: 0, batches: 2, retries: 1,
+  });
+});
+
 test("batch serialization ignores inherited toJSON hooks", async () => {
   const original = Object.prototype.toJSON;
   const bodies = [];

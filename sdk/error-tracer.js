@@ -454,7 +454,11 @@
         const candidate = current.concat([captured]);
         const candidateBody = safeSerialize(this.projectKey, candidate);
         if (candidateBody === null) {
-          rejected++;
+          if (current.length) {
+            batches.push(current);
+            current = [];
+          }
+          batches.push([captured]);
           continue;
         }
         if (utf8Length(candidateBody) > this.maxBatchBytes) {
@@ -464,7 +468,10 @@
           }
           batches.push(current);
           const singleBody = safeSerialize(this.projectKey, [captured]);
-          if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
+          if (singleBody === null) {
+            batches.push([captured]);
+            current = [];
+          } else if (utf8Length(singleBody) > this.maxBatchBytes) {
             rejected++;
             current = [];
           } else {
@@ -489,6 +496,11 @@
       const body = safeSerialize(this.projectKey, events);
       if (body === null) {
         return this.retryBatch(events, attempt);
+      }
+      if (utf8Length(body) > this.maxBatchBytes) {
+        this.stats.failed += events.length;
+        this.stats.dropped += events.length;
+        return Promise.resolve(false);
       }
       let result;
       try {
