@@ -136,6 +136,31 @@ test("extracts definitions nested in block containers", () => {
   ]);
 });
 
+test("respects ordered-list paragraph interruption rules", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph text",
+    "2. [continued]: docs/not-a-definition.md",
+    "Paragraph interrupted by one",
+    "1. [interrupting]: docs/interrupting.md",
+    "",
+    "2. [after-blank]: docs/after-blank.md",
+    "> Nested paragraph",
+    "> 3. [nested-continued]: docs/not-nested.md",
+    ">",
+    "> 3. [nested-after-blank]: docs/nested.md",
+  ].join("\n")), [
+    "docs/interrupting.md",
+    "docs/after-blank.md",
+    "docs/nested.md",
+  ]);
+});
+
+test("treats a tab-indented block quote as code", () => {
+  assert.deepEqual(markdownTargets(
+    "\t> [example]: docs/not-a-definition.md",
+  ), []);
+});
+
 test("ignores indented code after list markers", () => {
   assert.deepEqual(markdownTargets([
     "-     [unordered]: docs/unordered-missing.md",

@@ -58,8 +58,12 @@ export function markdownTargets(contents) {
   return targets;
 }
 
-function referenceDefinitionAt(lines, index) {
+function referenceDefinitionAt(lines, index, checkParagraphInterruption = true) {
   const parsedLine = parseBlockContainers(lines[index]);
+  if (checkParagraphInterruption &&
+      orderedListInterruptsParagraph(lines, index, parsedLine.containers)) {
+    return null;
+  }
   const match = parsedLine.content.match(
     /^[ \t]{0,3}\[(?!\^)((?:\\.|[^\]\\\n])+)\]:[ \t]*(.*)$/,
   );
@@ -191,7 +195,7 @@ function parseBlockContainers(line) {
   let remaining = line.replace(/\r$/, "");
   const containers = [];
   while (true) {
-    const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+    const quote = remaining.match(/^ {0,3}>[ \t]?/);
     if (quote) {
       remaining = remaining.slice(quote[0].length);
       containers.push({ type: "quote" });
@@ -200,7 +204,11 @@ function parseBlockContainers(line) {
     const list = listMarkerPrefix(remaining);
     if (list) {
       remaining = remaining.slice(list.length);
-      containers.push({ type: "list", indent: list.indent });
+      containers.push({
+        type: "list",
+        indent: list.indent,
+        orderedStart: list.orderedStart,
+      });
       continue;
     }
     return { content: remaining, containers };
@@ -208,7 +216,7 @@ function parseBlockContainers(line) {
 }
 
 function listMarkerPrefix(value) {
-  const marker = value.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])/);
+  const marker = value.match(/^( {0,3})(?:[-+*]|(\d{1,9})[.)])/);
   if (!marker) {
     return null;
   }
@@ -226,14 +234,73 @@ function listMarkerPrefix(value) {
     }
     index++;
   }
-  return { length: index, indent: column };
+  return {
+    length: index,
+    indent: column,
+    orderedStart: marker[2] === undefined ? null : Number(marker[2]),
+  };
+}
+
+function orderedListInterruptsParagraph(lines, index, containers) {
+  const listIndex = containers.findIndex((container) =>
+    container.type === "list" &&
+    container.orderedStart !== null &&
+    container.orderedStart !== 1);
+  if (listIndex < 0) {
+    return false;
+  }
+  return paragraphOpenBefore(lines, index, containers.slice(0, listIndex));
+}
+
+function paragraphOpenBefore(lines, index, containers) {
+  let paragraphOpen = false;
+  for (let previous = 0; previous < index; previous++) {
+    const content = continueBlockContainers(lines[previous], containers);
+    if (content === null) {
+      paragraphOpen = false;
+      continue;
+    }
+    const nextParagraphOpen = paragraphOpenAfter(content, paragraphOpen);
+    if (!paragraphOpen || !nextParagraphOpen) {
+      const definition = referenceDefinitionAt(lines, previous, false);
+      if (definition) {
+        paragraphOpen = false;
+        previous += definition.consumed;
+        continue;
+      }
+    }
+    paragraphOpen = nextParagraphOpen;
+  }
+  return paragraphOpen;
+}
+
+function paragraphOpenAfter(line, paragraphOpen) {
+  const value = line.replace(/\r$/, "");
+  if (!value.trim()) {
+    return false;
+  }
+  const list = listMarkerPrefix(value);
+  if (list) {
+    return paragraphOpen && list.orderedStart !== null && list.orderedStart !== 1;
+  }
+  if (/^(?: {4}|\t)/.test(value)) {
+    return paragraphOpen;
+  }
+  if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>|`{3,}|~{3,})/.test(value) ||
+      /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,}|=+[ \t]*)$/.test(value)) {
+    return false;
+  }
+  if (/^ {0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(value)) {
+    return paragraphOpen;
+  }
+  return true;
 }
 
 function continueBlockContainers(line, containers) {
   let remaining = line.replace(/\r$/, "");
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+      const quote = remaining.match(/^ {0,3}>[ \t]?/);
       if (!quote) {
         return null;
       }
@@ -252,7 +319,7 @@ function blankWithinBlockContainers(line, containers) {
   let remaining = line.replace(/\r$/, "");
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^[ \t]{0,3}>[ \t]?/);
+      const quote = remaining.match(/^ {0,3}>[ \t]?/);
       if (!quote) {
         return false;
       }
