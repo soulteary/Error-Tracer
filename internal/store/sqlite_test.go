@@ -52,6 +52,111 @@ func TestSQLiteRecordPersistsAggregatedIssue(t *testing.T) {
 	}
 }
 
+func TestSQLiteMigrationsVersionNewAndExistingDatabases(t *testing.T) {
+	ctx := context.Background()
+	newPath := filepath.Join(t.TempDir(), "new.db")
+	created := openTestSQLite(t, newPath)
+	var version int
+	if err := created.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read new database schema version: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("new database schema version = %d, want 1", version)
+	}
+	if err := created.Close(); err != nil {
+		t.Fatalf("close new database: %v", err)
+	}
+
+	existingPath := filepath.Join(t.TempDir(), "existing.db")
+	existing, err := sql.Open("sqlite", existingPath)
+	if err != nil {
+		t.Fatalf("open existing database: %v", err)
+	}
+	if _, err := existing.Exec(sqliteInitialSchema); err != nil {
+		t.Fatalf("create unversioned schema: %v", err)
+	}
+	if _, err := existing.Exec(`
+		INSERT INTO issues (
+			project_id, fingerprint, kind, message, source_url, line, column_number,
+			status, occurrences, first_seen, last_seen, last_event
+		) VALUES ('project-a', 'fingerprint', 'error', 'preserved', '', 0, 0,
+			'open', 1, 1, 1, '{}')
+	`); err != nil {
+		t.Fatalf("seed unversioned database: %v", err)
+	}
+	if err := existing.Close(); err != nil {
+		t.Fatalf("close unversioned database: %v", err)
+	}
+
+	migrated := openTestSQLite(t, existingPath)
+	t.Cleanup(func() { _ = migrated.Close() })
+	if err := migrated.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read migrated schema version: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("migrated schema version = %d, want 1", version)
+	}
+	var message string
+	if err := migrated.db.QueryRowContext(
+		ctx, "SELECT message FROM issues WHERE project_id = 'project-a'",
+	).Scan(&message); err != nil {
+		t.Fatalf("read preserved row: %v", err)
+	}
+	if message != "preserved" {
+		t.Fatalf("preserved message = %q, want preserved", message)
+	}
+}
+
+func TestSQLiteMigrationRejectsNewerSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "newer.db")
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if _, err := database.Exec("PRAGMA user_version = 99"); err != nil {
+		t.Fatalf("set newer schema version: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	if _, err := OpenSQLite(context.Background(), path); !errors.Is(err, ErrSQLiteSchemaTooNew) {
+		t.Fatalf("open newer schema error = %v, want ErrSQLiteSchemaTooNew", err)
+	}
+}
+
+func TestSQLiteMigrationRollsBackFailedVersion(t *testing.T) {
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	migrations := []sqliteMigration{{
+		version: 1,
+		name:    "broken migration",
+		schema:  "CREATE TABLE partial (id INTEGER); INVALID SQL;",
+	}}
+	if err := migrateSQLite(context.Background(), database, migrations); err == nil {
+		t.Fatal("failed migration error = nil")
+	}
+	var version int
+	if err := database.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatalf("read schema version: %v", err)
+	}
+	if version != 0 {
+		t.Fatalf("schema version = %d, want 0", version)
+	}
+	var count int
+	if err := database.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'partial'",
+	).Scan(&count); err != nil {
+		t.Fatalf("inspect partial table: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("partial table count = %d, want 0", count)
+	}
+}
+
 func TestSQLiteRecordBatchUsesOneAtomicTransaction(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })

@@ -279,6 +279,12 @@ rollback-journal behavior; in-memory databases require that setting. WAL creates
 copying database files. Keep the database on a local filesystem with reliable
 locking rather than a network filesystem that cannot safely support WAL.
 
+The service records an ordered SQLite schema version and applies each pending
+migration in its own transaction at startup. Existing unversioned databases are
+adopted without discarding their issue rows. Back up the database before running
+a newer Error-Tracer release; a build refuses to open a database whose schema is
+newer than it supports.
+
 ### Rotate the admin token without an access gap
 
 1. Generate a new random token.
