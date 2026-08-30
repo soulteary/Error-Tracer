@@ -197,16 +197,36 @@ function parseBlockContainers(line) {
       containers.push({ type: "quote" });
       continue;
     }
-    const list = remaining.match(
-      /^[ \t]{0,3}(?:[-+*]|\d{1,9}[.)])(?: {1,4}(?![ \t])|\t)/,
-    );
+    const list = listMarkerPrefix(remaining);
     if (list) {
-      remaining = remaining.slice(list[0].length);
-      containers.push({ type: "list", indent: indentationWidth(list[0]) });
+      remaining = remaining.slice(list.length);
+      containers.push({ type: "list", indent: list.indent });
       continue;
     }
     return { content: remaining, containers };
   }
+}
+
+function listMarkerPrefix(value) {
+  const marker = value.match(/^( {0,3})(?:[-+*]|\d{1,9}[.)])/);
+  if (!marker) {
+    return null;
+  }
+
+  let index = marker[0].length;
+  if (value[index] !== " " && value[index] !== "\t") {
+    return null;
+  }
+  const markerColumn = indentationWidth(value.slice(0, index));
+  let column = markerColumn;
+  while (value[index] === " " || value[index] === "\t") {
+    column = value[index] === "\t" ? column + 4 - (column % 4) : column + 1;
+    if (column - markerColumn > 4) {
+      return null;
+    }
+    index++;
+  }
+  return { length: index, indent: column };
 }
 
 function continueBlockContainers(line, containers) {

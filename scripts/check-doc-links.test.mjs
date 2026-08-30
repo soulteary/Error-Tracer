@@ -143,6 +143,14 @@ test("ignores indented code after list markers", () => {
   ].join("\n")), []);
 });
 
+test("parses mixed space-and-tab list padding", () => {
+  assert.deepEqual(markdownTargets([
+    "- \t```markdown",
+    "    [missing](docs/missing.md)",
+    "    ```",
+  ].join("\n")), []);
+});
+
 test("extracts reference destinations continued on the next line", () => {
   assert.deepEqual(markdownTargets([
     "[guide]:",
