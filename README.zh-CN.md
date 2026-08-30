@@ -102,7 +102,17 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 ```
 
 默认自动捕获错误。如果只需要手动上报，可设置 `autoCapture: false`。客户端还
-支持 `sampleRate`、`maxEventsPerMinute`、`beforeSend` 和自定义 `transport`。
+会先在内存中排队，并在累计 10 个事件、等待 1 秒或页面隐藏时，将事件发送到
+原子批量接口。队列最多保留 100 个事件；失败的批次采用指数退避，最多重试
+2 次。可通过 `batchSize`、`flushInterval`、`maxQueueSize`、`maxRetries`、
+`retryBaseDelay` 和 `maxBatchBytes` 调整这些边界。
+
+在可控的页面关闭流程中，可调用 `await tracer.flush()` 并检查返回值；
+`tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。
+`captureMessage` 或 `captureException` 成功只表示未满批次已进入本地队列，
+`flush()` 才表示本轮所有批次是否都被传输层接受。客户端还支持
+`sampleRate`、`maxEventsPerMinute`、`beforeSend`、`batchEndpoint` 和自定义
+批量 `transport`。事件进入队列前，可使用 `beforeSend` 删除业务特有的敏感值。
 
 ## 采集 API
 

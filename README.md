@@ -113,8 +113,22 @@ The service exposes its embedded SDK at `/assets/error-tracer.js`:
 ```
 
 Automatic capture is enabled by default. Set `autoCapture: false` when only
-manual capture is wanted. The client also supports `sampleRate`,
-`maxEventsPerMinute`, `beforeSend`, and a custom `transport`.
+manual capture is wanted. Events are queued in memory and sent to the atomic
+batch endpoint when 10 events have accumulated, after 1 second, or when the
+page is hidden. The queue retains at most 100 events and failed batches are
+retried twice with exponential backoff. These bounds can be changed with
+`batchSize`, `flushInterval`, `maxQueueSize`, `maxRetries`,
+`retryBaseDelay`, and `maxBatchBytes`.
+
+Call `await tracer.flush()` before a controlled shutdown when delivery should
+be observed, and use `tracer.getStats()` to inspect queued, sent, retried,
+failed, and dropped counts. A successful `captureMessage` or
+`captureException` means that a partial batch was accepted into the local
+queue; `flush()` reports whether every batch in that flush was accepted by the
+transport. The client also supports `sampleRate`, `maxEventsPerMinute`,
+`beforeSend`, `batchEndpoint`, and a custom batch `transport`. Use
+`beforeSend` to remove application-specific sensitive values before an event
+enters the queue.
 
 ## Ingestion API
 
