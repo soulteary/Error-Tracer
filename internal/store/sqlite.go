@@ -14,7 +14,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const sqliteSchema = `
+const sqliteInitialSchema = `
 CREATE TABLE IF NOT EXISTS issues (
     project_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
@@ -43,6 +43,18 @@ CREATE INDEX IF NOT EXISTS issues_project_last_seen_fingerprint
 CREATE INDEX IF NOT EXISTS issues_project_status_last_seen_fingerprint
     ON issues (project_id, status, last_seen DESC, fingerprint ASC);
 `
+
+type sqliteMigration struct {
+	version int
+	name    string
+	schema  string
+}
+
+var sqliteMigrations = []sqliteMigration{
+	{version: 1, name: "create issues", schema: sqliteInitialSchema},
+}
+
+var ErrSQLiteSchemaTooNew = errors.New("SQLite schema is newer than this Error-Tracer build")
 
 const sqliteUpsertIssue = `
 INSERT INTO issues (
@@ -125,11 +137,56 @@ func OpenSQLiteWithOptions(ctx context.Context, path string, options SQLiteOptio
 			return fail("configure sqlite database", fmt.Errorf("journal mode is %q, want WAL", journalMode))
 		}
 	}
-	if _, err := database.ExecContext(ctx, sqliteSchema); err != nil {
+	if err := migrateSQLite(ctx, database, sqliteMigrations); err != nil {
 		return fail("migrate sqlite database", err)
 	}
 
 	return &SQLite{db: database}, nil
+}
+
+func migrateSQLite(ctx context.Context, database *sql.DB, migrations []sqliteMigration) error {
+	var currentVersion int
+	if err := database.QueryRowContext(ctx, "PRAGMA user_version").Scan(&currentVersion); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	latestVersion := 0
+	if len(migrations) > 0 {
+		latestVersion = migrations[len(migrations)-1].version
+	}
+	if currentVersion > latestVersion {
+		return fmt.Errorf("%w: database=%d supported=%d", ErrSQLiteSchemaTooNew, currentVersion, latestVersion)
+	}
+
+	for _, migration := range migrations {
+		if migration.version <= currentVersion {
+			continue
+		}
+		if migration.version != currentVersion+1 {
+			return fmt.Errorf(
+				"invalid SQLite migration sequence: current=%d next=%d",
+				currentVersion, migration.version,
+			)
+		}
+		transaction, err := database.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin migration %d (%s): %w", migration.version, migration.name, err)
+		}
+		if _, err := transaction.ExecContext(ctx, migration.schema); err != nil {
+			_ = transaction.Rollback()
+			return fmt.Errorf("apply migration %d (%s): %w", migration.version, migration.name, err)
+		}
+		if _, err := transaction.ExecContext(
+			ctx, fmt.Sprintf("PRAGMA user_version = %d", migration.version),
+		); err != nil {
+			_ = transaction.Rollback()
+			return fmt.Errorf("record migration %d (%s): %w", migration.version, migration.name, err)
+		}
+		if err := transaction.Commit(); err != nil {
+			return fmt.Errorf("commit migration %d (%s): %w", migration.version, migration.name, err)
+		}
+		currentVersion = migration.version
+	}
+	return nil
 }
 
 func sqliteDataSourceName(path string, connections int) string {
