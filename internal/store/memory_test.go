@@ -104,6 +104,29 @@ func TestMemorySeparatesProjects(t *testing.T) {
 	}
 }
 
+func TestMemoryListIssuesDoesNotRetainUnrelatedProjectCapacity(t *testing.T) {
+	memory := NewMemory()
+	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)
+	for index := range 100 {
+		captured := testEvent(base.Add(time.Duration(index) * time.Minute))
+		captured.Message = fmt.Sprintf("unrelated-%d", index)
+		if _, err := memory.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record unrelated event %d: %v", index, err)
+		}
+	}
+
+	page, err := memory.ListIssues(context.Background(), "project-b", ListOptions{})
+	if err != nil {
+		t.Fatalf("list empty project: %v", err)
+	}
+	if len(page.Issues) != 0 || cap(page.Issues) != 0 {
+		t.Fatalf(
+			"empty project issues length/capacity = %d/%d, want 0/0",
+			len(page.Issues), cap(page.Issues),
+		)
+	}
+}
+
 func TestMemoryListIssuesIsBoundedAndOrdered(t *testing.T) {
 	memory := NewMemory()
 	base := time.Date(2026, time.August, 29, 1, 0, 0, 0, time.UTC)

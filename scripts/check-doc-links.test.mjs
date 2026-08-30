@@ -32,6 +32,26 @@ test("ignores reference definitions in fenced code", () => {
   ].join("\n")), []);
 });
 
+test("ignores GitHub footnote definitions", () => {
+  assert.deepEqual(markdownTargets([
+    "A statement with a footnote.[^1]",
+    "",
+    "[^1]: This is explanatory prose, not a link destination.",
+  ].join("\n")), []);
+});
+
+test("extracts reference destinations continued on the next line", () => {
+  assert.deepEqual(markdownTargets([
+    "[guide]:",
+    "  docs/guide.md",
+    "[wrapped]:",
+    "   <docs/wrapped.md> \"Wrapped guide\"",
+  ].join("\n")), [
+    "docs/guide.md",
+    "docs/wrapped.md",
+  ]);
+});
+
 test("reports a missing local reference target", () => {
   const root = mkdtempSync(join(tmpdir(), "error-tracer-doc-links-"));
   mkdirSync(join(root, "docs"));
@@ -40,6 +60,17 @@ test("reports a missing local reference target", () => {
   assert.deepEqual(checkMarkdownLinks(root, "README.md", [
     "[exists]: docs/exists.md",
     "[missing]: docs/missing.md",
+  ].join("\n")), [
+    "README.md: missing link target: docs/missing.md",
+  ]);
+});
+
+test("reports a missing continued reference target", () => {
+  const root = mkdtempSync(join(tmpdir(), "error-tracer-doc-links-"));
+
+  assert.deepEqual(checkMarkdownLinks(root, "README.md", [
+    "[missing]:",
+    "  docs/missing.md",
   ].join("\n")), [
     "README.md: missing link target: docs/missing.md",
   ]);

@@ -48,7 +48,7 @@ export function markdownTargets(contents) {
     targets.push(match[1].replace(/^<|>$/g, ""));
   }
   for (const match of markdown.matchAll(
-    /^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]+)>|([^\s]+))/gm,
+    /^[ \t]{0,3}\[(?!\^)[^\]\n]+\]:[ \t]*(?:\r?\n[ \t]{0,3})?(?:<([^>\n]+)>|([^\s]+))/gm,
   )) {
     targets.push(match[1] || match[2]);
   }

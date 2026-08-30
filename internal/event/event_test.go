@@ -37,6 +37,41 @@ func TestNormalizeRemovesSensitiveURLComponents(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsMalformedURLs(t *testing.T) {
+	captured := Event{
+		Kind:      KindError,
+		Message:   "failed",
+		SourceURL: "https://user:secret@example.com/%zz?token=secret#fragment",
+		PageURL:   "https://example.com/%zz?session=secret#fragment",
+	}
+
+	captured.Normalize()
+
+	if captured.SourceURL != "" || captured.PageURL != "" {
+		t.Fatalf(
+			"malformed URLs survived normalization: source=%q page=%q",
+			captured.SourceURL, captured.PageURL,
+		)
+	}
+	if err := captured.Validate(); err != nil {
+		t.Fatalf("Validate() returned %v after dropping optional malformed URLs", err)
+	}
+}
+
+func TestNormalizeRejectsMalformedResourceURL(t *testing.T) {
+	captured := Event{
+		Kind:      KindResourceError,
+		SourceURL: "https://user:secret@example.com/%zz?token=secret#fragment",
+	}
+	captured.Normalize()
+
+	err := captured.Validate()
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != "source_url" {
+		t.Fatalf("Validate() error = %v, want source_url validation error", err)
+	}
+}
+
 func TestNormalizeResolvesTagKeyCollisionsDeterministically(t *testing.T) {
 	tests := []struct {
 		name string
