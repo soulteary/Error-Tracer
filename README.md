@@ -20,6 +20,8 @@ tag. It is not part of the current runtime.
 - Writes batches of up to 100 events in one transaction and rolls the entire
   batch back on failure.
 - Tracks `open`, `resolved`, and `ignored` issue states.
+- Reopens a resolved issue when its fingerprint occurs again, while ignored
+  issues remain ignored.
 - Provides an authenticated JSON API and an embedded dashboard.
 - Offers English and Simplified Chinese dashboard locales without browser
   storage.
@@ -215,6 +217,9 @@ Status update body:
   "status": "resolved"
 }
 ```
+
+A new occurrence automatically moves a `resolved` issue back to `open`.
+`ignored` issues remain ignored when they recur.
 
 Pages are limited to 100 issues. When another page exists, the response includes
 an opaque `next_cursor`; pass it back with the same `limit` and `status` filter.

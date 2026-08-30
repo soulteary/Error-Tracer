@@ -63,6 +63,8 @@ func (m *Memory) RecordBatch(ctx context.Context, projectID string, captured []e
 				LastSeen:    item.ReceivedAt,
 				LastEvent:   item,
 			}
+		} else if issue.Status == IssueStatusResolved {
+			issue.Status = IssueStatusOpen
 		}
 
 		issue.Occurrences++

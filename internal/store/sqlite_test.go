@@ -410,6 +410,54 @@ func TestSQLiteSetIssueStatusPersists(t *testing.T) {
 	}
 }
 
+func TestSQLiteRecordReopensResolvedIssueAndPreservesIgnoredIssue(t *testing.T) {
+	database := openTestSQLite(t, ":memory:")
+	t.Cleanup(func() { _ = database.Close() })
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+
+	resolvedEvent := testEvent(base)
+	resolvedEvent.Message = "resolved regression"
+	resolved, err := database.Record(context.Background(), "project-a", resolvedEvent)
+	if err != nil {
+		t.Fatalf("record resolved issue: %v", err)
+	}
+	if _, err := database.SetIssueStatus(
+		context.Background(), "project-a", resolved.Fingerprint, IssueStatusResolved,
+	); err != nil {
+		t.Fatalf("resolve issue: %v", err)
+	}
+	reopened, err := database.Record(
+		context.Background(), "project-a", testEventWithMessage(base.Add(time.Minute), resolvedEvent.Message),
+	)
+	if err != nil {
+		t.Fatalf("record regression: %v", err)
+	}
+	if reopened.Status != IssueStatusOpen || reopened.Occurrences != 2 {
+		t.Fatalf("reopened issue = %#v, want open with two occurrences", reopened)
+	}
+
+	ignoredEvent := testEvent(base)
+	ignoredEvent.Message = "ignored noise"
+	ignored, err := database.Record(context.Background(), "project-a", ignoredEvent)
+	if err != nil {
+		t.Fatalf("record ignored issue: %v", err)
+	}
+	if _, err := database.SetIssueStatus(
+		context.Background(), "project-a", ignored.Fingerprint, IssueStatusIgnored,
+	); err != nil {
+		t.Fatalf("ignore issue: %v", err)
+	}
+	stillIgnored, err := database.Record(
+		context.Background(), "project-a", testEventWithMessage(base.Add(time.Minute), ignoredEvent.Message),
+	)
+	if err != nil {
+		t.Fatalf("record ignored recurrence: %v", err)
+	}
+	if stillIgnored.Status != IssueStatusIgnored || stillIgnored.Occurrences != 2 {
+		t.Fatalf("ignored issue = %#v, want ignored with two occurrences", stillIgnored)
+	}
+}
+
 func TestSQLitePruneIssuesIsProjectScopedAndUsesLastSeen(t *testing.T) {
 	database := openTestSQLite(t, ":memory:")
 	t.Cleanup(func() { _ = database.Close() })

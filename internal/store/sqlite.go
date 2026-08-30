@@ -52,6 +52,10 @@ INSERT INTO issues (
 ON CONFLICT (project_id, fingerprint) DO UPDATE SET
     occurrences = issues.occurrences + 1,
     first_seen = MIN(issues.first_seen, excluded.first_seen),
+    status = CASE
+        WHEN issues.status = 'resolved' THEN excluded.status
+        ELSE issues.status
+    END,
     last_event = CASE
         WHEN excluded.last_seen >= issues.last_seen THEN excluded.last_event
         ELSE issues.last_event
