@@ -102,6 +102,26 @@ test("keeps a list fence open across an unindented blank line", () => {
   ].join("\n")), []);
 });
 
+test("does not mask fences from ordered markers inside paragraphs", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "2. ~~~markdown",
+    "   [top-level](docs/top-level.md)",
+    "   ~~~",
+    "",
+    "2. ~~~markdown",
+    "   [masked](docs/not-visible.md)",
+    "   ~~~",
+    "> Quoted paragraph",
+    "> 3. ~~~markdown",
+    ">    [quoted](docs/quoted.md)",
+    ">    ~~~",
+  ].join("\n")), [
+    "docs/top-level.md",
+    "docs/quoted.md",
+  ]);
+});
+
 test("keeps a mixed-container fence open across a quote-only blank", () => {
   assert.deepEqual(markdownTargets([
     "> - ```markdown",

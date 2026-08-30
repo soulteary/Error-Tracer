@@ -201,7 +201,7 @@ function referenceContinuation(lines, index, containers) {
   return continuation?.match(/^[ \t]{0,3}(\S.*)$/)?.[1] || null;
 }
 
-function parseBlockContainers(line) {
+function parseBlockContainers(line, orderedListCanInterrupt = null) {
   let remaining = line.replace(/\r$/, "");
   const containers = [];
   while (true) {
@@ -213,6 +213,10 @@ function parseBlockContainers(line) {
     }
     const list = listMarkerPrefix(remaining);
     if (list) {
+      if (list.orderedStart !== null && list.orderedStart !== 1 &&
+          orderedListCanInterrupt && !orderedListCanInterrupt(containers)) {
+        return { content: remaining, containers };
+      }
       remaining = remaining.slice(list.length);
       containers.push({
         type: "list",
@@ -392,7 +396,9 @@ function isExternal(target) {
 function withoutFencedCode(contents) {
   let fence = null;
   let htmlBlock = null;
-  return contents.split("\n").map((line) => {
+  const output = [];
+  const paragraphCache = new Map();
+  for (const line of contents.split("\n")) {
     if (fence) {
       const content = continueBlockContainers(line, fence.containers);
       if (content !== null) {
@@ -400,10 +406,12 @@ function withoutFencedCode(contents) {
         if (closing[0] === fence.character && closing.length >= fence.length) {
           fence = null;
         }
-        return "";
+        output.push("");
+        continue;
       }
       if (blankWithinBlockContainers(line, fence.containers)) {
-        return "";
+        output.push("");
+        continue;
       }
       fence = null;
     }
@@ -414,15 +422,20 @@ function withoutFencedCode(contents) {
         if (htmlBlock.terminator.test(content)) {
           htmlBlock = null;
         }
-        return "";
+        output.push("");
+        continue;
       }
       if (blankWithinBlockContainers(line, htmlBlock.containers)) {
-        return "";
+        output.push("");
+        continue;
       }
       htmlBlock = null;
     }
 
-    const parsed = parseBlockContainers(line);
+    const parsed = parseBlockContainers(line, (containers) =>
+      !paragraphOpenBefore(
+        output, output.length, containers, paragraphCache,
+      ));
     const openingHTML = htmlBlockAt(parsed.content);
     if (openingHTML) {
       if (!openingHTML.terminator.test(parsed.content)) {
@@ -431,7 +444,8 @@ function withoutFencedCode(contents) {
           containers: parsed.containers,
         };
       }
-      return "";
+      output.push("");
+      continue;
     }
     const opening = parsed.content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
     if (opening && !(opening[1][0] === "`" && opening[2].includes("`"))) {
@@ -440,10 +454,12 @@ function withoutFencedCode(contents) {
         length: opening[1].length,
         containers: parsed.containers,
       };
-      return "";
+      output.push("");
+      continue;
     }
-    return line;
-  }).join("\n");
+    output.push(line);
+  }
+  return output.join("\n");
 }
 
 function htmlBlockAt(content) {
