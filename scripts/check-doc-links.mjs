@@ -229,6 +229,36 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
   }
 }
 
+function parseContinuedBlockContainers(
+  line,
+  activeContainers,
+  activeParagraphOpen,
+  orderedListCanInterrupt,
+) {
+  const continued = blockContainerPrefix(line, activeContainers);
+  let containers = activeContainers.slice(0, continued.count);
+  let content = continued.content;
+  if (continued.count < activeContainers.length && activeParagraphOpen &&
+      paragraphOpenAfter(content, true)) {
+    containers = activeContainers;
+  } else if (continued.count < activeContainers.length && !content.trim()) {
+    for (let count = activeContainers.length; count > continued.count; count--) {
+      if (blankWithinBlockContainers(line, activeContainers.slice(0, count))) {
+        containers = activeContainers.slice(0, count);
+        content = "";
+        break;
+      }
+    }
+  }
+
+  const nested = parseBlockContainers(content, (nestedContainers) =>
+    orderedListCanInterrupt([...containers, ...nestedContainers]));
+  return {
+    content: nested.content,
+    containers: [...containers, ...nested.containers],
+  };
+}
+
 function listMarkerPrefix(value) {
   const marker = value.match(/^( {0,3})(?:[-+*]|(\d{1,9})[.)])/);
   if (!marker) {
@@ -240,11 +270,19 @@ function listMarkerPrefix(value) {
     return null;
   }
   const markerColumn = indentationWidth(value.slice(0, index));
+  const firstPaddingEnd = index + 1;
+  const firstPaddingColumn = value[index] === "\t"
+    ? markerColumn + 4 - (markerColumn % 4)
+    : markerColumn + 1;
   let column = markerColumn;
   while (value[index] === " " || value[index] === "\t") {
     column = value[index] === "\t" ? column + 4 - (column % 4) : column + 1;
     if (column - markerColumn > 4) {
-      return null;
+      return {
+        length: firstPaddingEnd,
+        indent: firstPaddingColumn,
+        orderedStart: marker[2] === undefined ? null : Number(marker[2]),
+      };
     }
     index++;
   }
@@ -283,7 +321,8 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     state.index++;
     const content = continueBlockContainers(lines[previous], containers);
     if (content === null) {
-      state.paragraphOpen = false;
+      state.paragraphOpen = state.paragraphOpen &&
+        lazyParagraphContinuation(lines[previous], containers);
       continue;
     }
     const nextParagraphOpen = paragraphOpenAfter(content, state.paragraphOpen);
@@ -323,22 +362,36 @@ function paragraphOpenAfter(line, paragraphOpen) {
 }
 
 function continueBlockContainers(line, containers) {
+  const continued = blockContainerPrefix(line, containers);
+  return continued.count === containers.length ? continued.content : null;
+}
+
+function blockContainerPrefix(line, containers) {
   let remaining = line.replace(/\r$/, "");
+  let count = 0;
   for (const container of containers) {
     if (container.type === "quote") {
       const quote = remaining.match(/^ {0,3}>[ \t]?/);
       if (!quote) {
-        return null;
+        break;
       }
       remaining = remaining.slice(quote[0].length);
-      continue;
+    } else {
+      const stripped = stripIndent(remaining, container.indent);
+      if (stripped === null) {
+        break;
+      }
+      remaining = stripped;
     }
-    remaining = stripIndent(remaining, container.indent);
-    if (remaining === null) {
-      return null;
-    }
+    count++;
   }
-  return remaining;
+  return { content: remaining, count };
+}
+
+function lazyParagraphContinuation(line, containers) {
+  const continued = blockContainerPrefix(line, containers);
+  return continued.count < containers.length &&
+    paragraphOpenAfter(continued.content, true);
 }
 
 function blankWithinBlockContainers(line, containers) {
@@ -396,6 +449,7 @@ function isExternal(target) {
 function withoutFencedCode(contents) {
   let fence = null;
   let htmlBlock = null;
+  let activeContainers = [];
   const output = [];
   const paragraphCache = new Map();
   for (const line of contents.split("\n")) {
@@ -432,10 +486,28 @@ function withoutFencedCode(contents) {
       htmlBlock = null;
     }
 
-    const parsed = parseBlockContainers(line, (containers) =>
+    const orderedListCanInterrupt = (containers) =>
       !paragraphOpenBefore(
         output, output.length, containers, paragraphCache,
-      ));
+      );
+    const parsed = activeContainers.length
+      ? parseContinuedBlockContainers(
+        line,
+        activeContainers,
+        paragraphOpenBefore(
+          output, output.length, activeContainers, paragraphCache,
+        ),
+        orderedListCanInterrupt,
+      )
+      : parseBlockContainers(line, orderedListCanInterrupt);
+    activeContainers = parsed.containers;
+    if (stripIndent(parsed.content, 4) !== null &&
+        !paragraphOpenBefore(
+          output, output.length, parsed.containers, paragraphCache,
+        )) {
+      output.push("");
+      continue;
+    }
     const openingHTML = htmlBlockAt(parsed.content);
     if (openingHTML) {
       if (!openingHTML.terminator.test(parsed.content)) {

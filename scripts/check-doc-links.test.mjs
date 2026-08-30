@@ -212,6 +212,19 @@ test("does not let reference definitions interrupt paragraphs", () => {
   ]);
 });
 
+test("preserves lazy block-quote paragraph continuations", () => {
+  assert.deepEqual(markdownTargets([
+    "> Quoted paragraph",
+    "lazy continuation",
+    "> [quoted]: docs/not-a-definition.md",
+    ">",
+    "> [after-blank]: docs/quoted.md",
+    "> > Nested paragraph",
+    "> lazy nested continuation",
+    "> > [nested]: docs/not-a-nested-definition.md",
+  ].join("\n")), ["docs/quoted.md"]);
+});
+
 test("recognizes short hyphen setext underlines", () => {
   assert.deepEqual(markdownTargets([
     "Heading",
@@ -231,6 +244,38 @@ test("ignores indented code after list markers", () => {
     "-     [unordered]: docs/unordered-missing.md",
     "1.     [ordered]: docs/ordered-missing.md",
   ].join("\n")), []);
+});
+
+test("ignores links in four-column indented code", () => {
+  for (const contents of [
+    [
+      "    ```",
+      "    [inline](docs/inline-missing.md)",
+      "    [reference]: docs/reference-missing.md",
+      "    ```",
+    ].join("\n"),
+    ">     [quoted](docs/quoted-missing.md)",
+    "-     [listed](docs/listed-missing.md)",
+    "\t[tabbed](docs/tabbed-missing.md)",
+  ]) {
+    assert.deepEqual(markdownTargets(contents), []);
+  }
+});
+
+test("keeps indented lazy paragraph continuations visible", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "    [inline](docs/inline.md)",
+  ].join("\n")), ["docs/inline.md"]);
+});
+
+test("keeps indented list continuations visible", () => {
+  assert.deepEqual(markdownTargets([
+    "- List item",
+    "  [inline](docs/inline.md)",
+    "  continued",
+    "  [second](docs/second.md)",
+  ].join("\n")), ["docs/inline.md", "docs/second.md"]);
 });
 
 test("parses mixed space-and-tab list padding", () => {
