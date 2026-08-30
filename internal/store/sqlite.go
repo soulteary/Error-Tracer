@@ -44,6 +44,22 @@ CREATE INDEX IF NOT EXISTS issues_project_status_last_seen_fingerprint
     ON issues (project_id, status, last_seen DESC, fingerprint ASC);
 `
 
+const sqliteEventHistorySchema = `
+CREATE TABLE events (
+    sequence INTEGER PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    payload BLOB NOT NULL,
+    FOREIGN KEY (project_id, fingerprint)
+        REFERENCES issues (project_id, fingerprint) ON DELETE CASCADE
+);
+
+CREATE INDEX events_issue_received_sequence
+    ON events (project_id, fingerprint, received_at DESC, sequence DESC);
+`
+
 type sqliteMigration struct {
 	version int
 	name    string
@@ -52,6 +68,7 @@ type sqliteMigration struct {
 
 var sqliteMigrations = []sqliteMigration{
 	{version: 1, name: "create issues", schema: sqliteInitialSchema},
+	{version: 2, name: "create event history", schema: sqliteEventHistorySchema},
 }
 
 var ErrSQLiteSchemaTooNew = errors.New("SQLite schema is newer than this Error-Tracer build")
@@ -75,6 +92,22 @@ ON CONFLICT (project_id, fingerprint) DO UPDATE SET
     last_seen = MAX(issues.last_seen, excluded.last_seen)
 `
 
+const sqliteInsertEvent = `
+INSERT INTO events (project_id, fingerprint, event_id, received_at, payload)
+VALUES (?, ?, ?, ?, ?)
+`
+
+const sqliteTrimEvents = `
+DELETE FROM events
+WHERE sequence IN (
+    SELECT sequence
+    FROM events
+    WHERE project_id = ? AND fingerprint = ?
+    ORDER BY received_at DESC, sequence DESC
+    LIMIT -1 OFFSET ?
+)
+`
+
 var ErrDatabasePathRequired = errors.New("database path is required")
 
 var (
@@ -87,11 +120,13 @@ var (
 // is committing.
 type SQLiteOptions struct {
 	MaxOpenConnections int
+	MaxEventsPerIssue  int
 }
 
 // SQLite persists aggregated issues in a local SQLite database.
 type SQLite struct {
-	db *sql.DB
+	db                *sql.DB
+	maxEventsPerIssue int
 }
 
 // OpenSQLite opens a SQLite database and applies its idempotent schema.
@@ -115,6 +150,13 @@ func OpenSQLiteWithOptions(ctx context.Context, path string, options SQLiteOptio
 	}
 	if connections > 1 && isMemorySQLitePath(path) {
 		return nil, ErrConcurrentMemoryDatabase
+	}
+	maxEvents := options.MaxEventsPerIssue
+	if maxEvents == 0 {
+		maxEvents = DefaultMaxEventsPerIssue
+	}
+	if maxEvents < 1 || maxEvents > MaxEventsPerIssue {
+		return nil, ErrInvalidEventHistoryLimit
 	}
 
 	database, err := sql.Open("sqlite", sqliteDataSourceName(path, connections))
@@ -145,7 +187,7 @@ func OpenSQLiteWithOptions(ctx context.Context, path string, options SQLiteOptio
 		return fail("migrate sqlite database", err)
 	}
 
-	return &SQLite{db: database}, nil
+	return &SQLite{db: database, maxEventsPerIssue: maxEvents}, nil
 }
 
 func migrateSQLite(ctx context.Context, database *sql.DB, migrations []sqliteMigration) error {
@@ -272,24 +314,51 @@ func (s *SQLite) RecordBatch(ctx context.Context, projectID string, captured []e
 	}
 	defer func() { _ = transaction.Rollback() }()
 
-	statement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
+	issueStatement, err := transaction.PrepareContext(ctx, sqliteUpsertIssue)
 	if err != nil {
 		return nil, fmt.Errorf("prepare issue batch: %w", err)
 	}
+	eventStatement, err := transaction.PrepareContext(ctx, sqliteInsertEvent)
+	if err != nil {
+		_ = issueStatement.Close()
+		return nil, fmt.Errorf("prepare event batch: %w", err)
+	}
+	touched := make(map[string]struct{}, len(records))
 	for index, record := range records {
-		_, err = statement.ExecContext(
+		_, err = issueStatement.ExecContext(
 			ctx, projectID, record.fingerprint, record.event.Kind,
 			record.event.Message, record.event.SourceURL, record.event.Line,
 			record.event.Column, IssueStatusOpen, record.receivedAt,
 			record.receivedAt, record.encoded,
 		)
 		if err != nil {
-			_ = statement.Close()
+			_ = eventStatement.Close()
+			_ = issueStatement.Close()
 			return nil, fmt.Errorf("upsert issue for event %d: %w", index, err)
 		}
+		if _, err = eventStatement.ExecContext(
+			ctx, projectID, record.fingerprint, record.event.ID,
+			record.receivedAt, record.encoded,
+		); err != nil {
+			_ = eventStatement.Close()
+			_ = issueStatement.Close()
+			return nil, fmt.Errorf("insert event history for event %d: %w", index, err)
+		}
+		touched[record.fingerprint] = struct{}{}
 	}
-	if err := statement.Close(); err != nil {
+	if err := eventStatement.Close(); err != nil {
+		_ = issueStatement.Close()
+		return nil, fmt.Errorf("close event batch statement: %w", err)
+	}
+	if err := issueStatement.Close(); err != nil {
 		return nil, fmt.Errorf("close issue batch statement: %w", err)
+	}
+	for fingerprint := range touched {
+		if _, err := transaction.ExecContext(
+			ctx, sqliteTrimEvents, projectID, fingerprint, s.maxEventsPerIssue,
+		); err != nil {
+			return nil, fmt.Errorf("trim event history for %s: %w", fingerprint, err)
+		}
 	}
 
 	issues := make([]Issue, len(records))
@@ -412,6 +481,103 @@ LIMIT ? OFFSET ?
 		Offset: options.Offset,
 		Next:   next,
 	}, nil
+}
+
+// ListIssueEvents returns retained occurrences ordered newest first.
+func (s *SQLite) ListIssueEvents(
+	ctx context.Context,
+	projectID, fingerprint string,
+	options EventListOptions,
+) (EventPage, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return EventPage{}, ErrProjectRequired
+	}
+	if err := ctx.Err(); err != nil {
+		return EventPage{}, err
+	}
+	options = normalizeEventListOptions(options)
+
+	transaction, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return EventPage{}, fmt.Errorf("begin event list transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	if _, err := queryIssue(ctx, transaction, projectID, fingerprint); err != nil {
+		return EventPage{}, err
+	}
+
+	var total int
+	if err := transaction.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM events WHERE project_id = ? AND fingerprint = ?",
+		projectID, fingerprint,
+	).Scan(&total); err != nil {
+		return EventPage{}, fmt.Errorf("count issue events: %w", err)
+	}
+
+	whereClause := "project_id = ? AND fingerprint = ?"
+	arguments := []any{projectID, fingerprint}
+	if options.After != nil {
+		whereClause += " AND (received_at < ? OR (received_at = ? AND sequence < ?))"
+		receivedAt := options.After.ReceivedAt.UnixNano()
+		arguments = append(arguments, receivedAt, receivedAt, options.After.Sequence)
+	}
+	arguments = append(arguments, options.Limit+1)
+	rows, err := transaction.QueryContext(ctx, `
+SELECT sequence, received_at, payload
+FROM events
+WHERE `+whereClause+`
+ORDER BY received_at DESC, sequence DESC
+LIMIT ?
+`, arguments...)
+	if err != nil {
+		return EventPage{}, fmt.Errorf("list issue events: %w", err)
+	}
+	defer rows.Close()
+
+	type retainedEvent struct {
+		sequence   int64
+		receivedAt time.Time
+		event      event.Event
+	}
+	retained := make([]retainedEvent, 0, min(options.Limit+1, total))
+	for rows.Next() {
+		var (
+			item       retainedEvent
+			receivedAt int64
+			encoded    []byte
+		)
+		if err := rows.Scan(&item.sequence, &receivedAt, &encoded); err != nil {
+			return EventPage{}, fmt.Errorf("scan issue event: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &item.event); err != nil {
+			return EventPage{}, fmt.Errorf("decode issue event: %w", err)
+		}
+		item.receivedAt = time.Unix(0, receivedAt).UTC()
+		retained = append(retained, item)
+	}
+	if err := rows.Err(); err != nil {
+		return EventPage{}, fmt.Errorf("iterate issue events: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return EventPage{}, fmt.Errorf("close issue event rows: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return EventPage{}, fmt.Errorf("commit event list transaction: %w", err)
+	}
+
+	var next *EventCursor
+	if len(retained) > options.Limit {
+		retained = retained[:options.Limit]
+		last := retained[len(retained)-1]
+		next = &EventCursor{ReceivedAt: last.receivedAt, Sequence: last.sequence}
+	}
+	events := make([]event.Event, len(retained))
+	for index, item := range retained {
+		events[index] = item.event
+	}
+	return EventPage{Events: events, Total: total, Limit: options.Limit, Next: next}, nil
 }
 
 // SetIssueStatus updates the triage state of one issue.

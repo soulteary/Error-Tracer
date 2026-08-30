@@ -14,6 +14,7 @@ const (
 	defaultAddress           = ":8080"
 	defaultDatabasePath      = "error-tracer.db"
 	defaultSQLiteConnections = 4
+	defaultMaxEventsPerIssue = 100
 	defaultRatePerMinute     = 120
 	defaultRateBurst         = 30
 	defaultShutdownTimeout   = 10 * time.Second
@@ -25,6 +26,7 @@ type Config struct {
 	Address                  string
 	DatabasePath             string
 	SQLiteMaxOpenConnections int
+	MaxEventsPerIssue        int
 	ShutdownTimeout          time.Duration
 	ProjectID                string
 	IngestKey                string
@@ -50,6 +52,12 @@ func FromEnvironment() (Config, error) {
 	}
 	sqliteConnections, err := positiveInteger(
 		"ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS", defaultSQLiteConnections, 32,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	maxEventsPerIssue, err := positiveInteger(
+		"ERROR_TRACER_MAX_EVENTS_PER_ISSUE", defaultMaxEventsPerIssue, 1000,
 	)
 	if err != nil {
 		return Config{}, err
@@ -102,6 +110,7 @@ func FromEnvironment() (Config, error) {
 		Address:                  address,
 		DatabasePath:             databasePath,
 		SQLiteMaxOpenConnections: sqliteConnections,
+		MaxEventsPerIssue:        maxEventsPerIssue,
 		ShutdownTimeout:          defaultShutdownTimeout,
 		ProjectID:                projectID,
 		IngestKey:                ingestKey,

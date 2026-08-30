@@ -80,6 +80,7 @@ func New(options Options) *Server {
 	mux.HandleFunc("GET /assets/error-tracer.js", server.browserSDK)
 	mux.HandleFunc("GET /api/v1/meta", server.publicMetadata)
 	mux.HandleFunc("GET /api/v1/demo/issues", server.listDemoIssues)
+	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}/events", server.listDemoIssueEvents)
 	mux.HandleFunc("GET /api/v1/demo/issues/{fingerprint}", server.getDemoIssue)
 	if !options.DemoOnly {
 		mux.HandleFunc("POST /api/v1/events", server.ingestEventWithOrigin)
@@ -87,6 +88,7 @@ func New(options Options) *Server {
 		mux.HandleFunc("POST /api/v1/events/batch", server.ingestBatchWithOrigin)
 		mux.HandleFunc("OPTIONS /api/v1/events/batch", server.preflightEvent)
 		mux.HandleFunc("GET /api/v1/issues", server.listIssues)
+		mux.HandleFunc("GET /api/v1/issues/{fingerprint}/events", server.listIssueEvents)
 		mux.HandleFunc("GET /api/v1/issues/{fingerprint}", server.getIssue)
 		mux.HandleFunc("PATCH /api/v1/issues/{fingerprint}", server.updateIssue)
 	}

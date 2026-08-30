@@ -3,8 +3,8 @@
 [English](README.md)
 
 Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服务使用 Go
-编写，将聚合后的问题存储在 SQLite 中，并提供零依赖浏览器 SDK 和内嵌的
-问题处理 Dashboard。
+编写，将聚合后的问题和有界事件历史存储在 SQLite 中，并提供零依赖浏览器
+SDK 和内嵌的问题处理 Dashboard。
 
 2013 年的 PHP/MySQL 原始实现保存在
 [`v1.0.0-legacy`](https://github.com/soulteary/Error-Tracer/tree/v1.0.0-legacy)
@@ -16,6 +16,7 @@ Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服�
 - 持久化之前统一规范事件，并移除 URL 中的凭据、查询参数和片段。
 - 使用稳定的 SHA-256 指纹聚合同类事件。
 - 使用 SQLite 存储问题聚合数据。
+- 为每个问题保留最新事件，并支持稳定的游标分页。
 - 在单个事务中原子写入最多 100 个事件，任一步失败都会回滚整批数据。
 - 支持 `open`、`resolved` 和 `ignored` 三种问题状态。
 - 相同指纹再次出现时自动重开已解决问题，同时保持已忽略问题的状态。
@@ -173,6 +174,7 @@ Authorization: Bearer 替换为管理员令牌
 | `GET` | `/api/v1/issues?limit=50&cursor=...` | 使用 `next_cursor` 继续读取 |
 | `GET` | `/api/v1/issues?status=open` | 按 `open`、`resolved` 或 `ignored` 筛选 |
 | `GET` | `/api/v1/issues/{fingerprint}` | 读取单个问题 |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | 按最新顺序读取保留的事件 |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | 修改问题状态 |
 
 状态修改请求体：
@@ -191,6 +193,10 @@ Authorization: Bearer 替换为管理员令牌
 为兼容旧客户端，`offset` 参数仍然保留，但超过 100,000 的偏移量会被拒绝；
 内嵌 Dashboard 已改用游标分页。
 
+事件历史分页同样接受 `limit` 和 `cursor`。`total` 表示当前保留的事件数，
+问题上的 `occurrences` 仍表示生命周期累计次数。写入新事件的同一事务会删除
+超出每问题上限的最旧历史记录。
+
 ## 服务端点
 
 | 方法 | 路径 | 鉴权 | 说明 |
@@ -200,10 +206,12 @@ Authorization: Bearer 替换为管理员令牌
 | `GET` | `/api/v1/meta` | 无 | 公开演示可用状态及纯演示模式标记 |
 | `GET` | `/api/v1/demo/issues` | 无，仅演示模式 | 列出内置只读演示问题 |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | 无，仅演示模式 | 读取一个内置演示问题 |
+| `GET` | `/api/v1/demo/issues/{fingerprint}/events` | 无，仅演示模式 | 读取内置事件历史 |
 | `POST` | `/api/v1/events` | 请求体中的采集密钥 | 提交单个事件 |
 | `POST` | `/api/v1/events/batch` | 请求体中的采集密钥 | 原子提交一批事件 |
 | `GET` | `/api/v1/issues` | 管理员 Bearer 令牌 | 列出问题 |
 | `GET` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 读取问题 |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | 管理员 Bearer 令牌 | 读取保留的事件 |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | 管理员 Bearer 令牌 | 更新状态 |
 | `GET` | `/healthz` | 无 | 进程存活状态 |
 | `GET` | `/readyz` | 无 | 是否可以接收新工作 |
@@ -216,6 +224,7 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_ADDRESS` | 否 | `:8080` | HTTP 监听地址 |
 | `ERROR_TRACER_DATABASE_PATH` | 否 | `error-tracer.db` | SQLite 数据库路径 |
 | `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | 否 | `4` | SQLite 连接池大小，范围 1–32 |
+| `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | 否 | `100` | 每问题保留的最新事件数，范围 1–1,000 |
 | `ERROR_TRACER_PROJECT_ID` | 否 | `default` | 当前进程拥有的项目命名空间 |
 | `ERROR_TRACER_INGEST_KEY` | 是 | — | 采集凭据，至少 16 字节 |
 | `ERROR_TRACER_ADMIN_TOKEN` | 是 | — | 管理凭据，至少 24 字节 |
@@ -234,7 +243,7 @@ Authorization: Bearer 替换为管理员令牌
 启用保留策略后，Error-Tracer 会在启动时清理一次，之后每 24 小时清理一次。
 清理仅作用于当前项目，并依据 `last_seen` 判断；恰好位于截止时间的问题会被保留。
 SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文件，请在停机状态下另行
-执行 `VACUUM`。
+执行 `VACUUM`。删除过期问题时也会级联删除其保留的事件记录。
 
 ### SQLite 并发与备份
 
@@ -248,6 +257,9 @@ SQLite 会复用删除后释放的页面。如果必须立即缩小数据库文�
 服务会记录有序的 SQLite 架构版本，并在启动时以独立事务应用每一项待执行迁移。
 现有未记录版本的数据库会被接管，已有问题数据不会丢失。运行新版 Error-Tracer
 前应先备份数据库；如果数据库架构版本高于当前程序支持的版本，程序会拒绝启动。
+
+从只保存聚合数据的旧数据库升级时，事件历史初始为空；升级后的新事件会被保留，
+但无法从聚合行还原升级前的每次事件。
 
 ### 无访问空窗地轮换管理员令牌
 

@@ -3,8 +3,9 @@
 [简体中文](README.zh-CN.md)
 
 Error-Tracer is a small, self-hosted browser error collector. The current
-service is written in Go, stores aggregated issues in SQLite, ships a
-dependency-free browser SDK, and includes an embedded triage dashboard.
+service is written in Go, stores aggregated issues and bounded occurrence
+history in SQLite, ships a dependency-free browser SDK, and includes an
+embedded triage dashboard.
 
 The original 2013 PHP/MySQL implementation is preserved in the
 [`v1.0.0-legacy`](https://github.com/soulteary/Error-Tracer/tree/v1.0.0-legacy)
@@ -17,6 +18,7 @@ tag. It is not part of the current runtime.
   persistence.
 - Groups matching events with a stable SHA-256 fingerprint.
 - Persists issue aggregates in SQLite.
+- Retains the newest events for each issue with stable cursor pagination.
 - Writes batches of up to 100 events in one transaction and rolls the entire
   batch back on failure.
 - Tracks `open`, `resolved`, and `ignored` issue states.
@@ -208,6 +210,7 @@ Authorization: Bearer replace-with-the-admin-token
 | `GET` | `/api/v1/issues?limit=50&cursor=...` | Continue from `next_cursor` |
 | `GET` | `/api/v1/issues?status=open` | Filter by `open`, `resolved`, or `ignored` |
 | `GET` | `/api/v1/issues/{fingerprint}` | Read one issue |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | Read retained occurrences, newest first |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Change the issue status |
 
 Status update body:
@@ -227,6 +230,11 @@ Cursor and offset cannot be combined. The legacy `offset` parameter remains
 available for compatibility, but offsets above 100,000 are rejected. The
 embedded dashboard uses cursor pagination.
 
+Occurrence-history pages also accept `limit` and `cursor`. Their `total`
+is the number of retained events, while the issue's `occurrences` field remains
+the lifetime aggregate count. The configured per-issue limit discards the oldest
+history rows in the same transaction that records new events.
+
 ## Service endpoints
 
 | Method | Path | Authentication | Description |
@@ -236,10 +244,12 @@ embedded dashboard uses cursor pagination.
 | `GET` | `/api/v1/meta` | None | Public demo availability and demo-only mode flags |
 | `GET` | `/api/v1/demo/issues` | None, demo mode only | List built-in read-only demo issues |
 | `GET` | `/api/v1/demo/issues/{fingerprint}` | None, demo mode only | Read one built-in demo issue |
+| `GET` | `/api/v1/demo/issues/{fingerprint}/events` | None, demo mode only | Read built-in occurrence history |
 | `POST` | `/api/v1/events` | Ingest key in the body | Submit one event |
 | `POST` | `/api/v1/events/batch` | Ingest key in the body | Submit an atomic batch |
 | `GET` | `/api/v1/issues` | Admin bearer token | List issues |
 | `GET` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Read an issue |
+| `GET` | `/api/v1/issues/{fingerprint}/events` | Admin bearer token | Read retained occurrences |
 | `PATCH` | `/api/v1/issues/{fingerprint}` | Admin bearer token | Update status |
 | `GET` | `/healthz` | None | Process liveness |
 | `GET` | `/readyz` | None | Readiness for new work |
@@ -252,6 +262,7 @@ embedded dashboard uses cursor pagination.
 | `ERROR_TRACER_ADDRESS` | No | `:8080` | HTTP listen address |
 | `ERROR_TRACER_DATABASE_PATH` | No | `error-tracer.db` | SQLite database path |
 | `ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS` | No | `4` | SQLite pool size, from 1 to 32 |
+| `ERROR_TRACER_MAX_EVENTS_PER_ISSUE` | No | `100` | Newest event rows retained per issue, from 1 to 1,000 |
 | `ERROR_TRACER_PROJECT_ID` | No | `default` | Project namespace owned by this process |
 | `ERROR_TRACER_INGEST_KEY` | Yes | — | Ingestion credential, at least 16 bytes |
 | `ERROR_TRACER_ADMIN_TOKEN` | Yes | — | Admin credential, at least 24 bytes |
@@ -271,7 +282,8 @@ When retention is enabled, Error-Tracer removes expired issues at startup and
 then every 24 hours. Cleanup is scoped to the configured project and uses
 `last_seen`; an issue seen exactly at the cutoff is kept. SQLite reuses deleted
 pages for later writes. Run an offline `VACUUM` only when the database file
-must be physically compacted immediately.
+must be physically compacted immediately. Deleting an expired issue also
+deletes its retained event rows.
 
 ### SQLite concurrency and backups
 
@@ -289,6 +301,10 @@ migration in its own transaction at startup. Existing unversioned databases are
 adopted without discarding their issue rows. Back up the database before running
 a newer Error-Tracer release; a build refuses to open a database whose schema is
 newer than it supports.
+
+Upgrading an existing aggregate-only database creates an empty occurrence
+history. New events are retained after the upgrade; past events cannot be
+reconstructed from the aggregate row.
 
 ### Rotate the admin token without an access gap
 

@@ -196,6 +196,58 @@ func TestMemoryListIssuesFiltersByStatus(t *testing.T) {
 	}
 }
 
+func TestMemoryListIssueEventsIsBoundedProjectScopedAndCursorPaginated(t *testing.T) {
+	memory := NewMemoryWithOptions(MemoryOptions{MaxEventsPerIssue: 3})
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+	events := historyEvents(base, 5, "bounded history")
+	events[3].ReceivedAt = events[4].ReceivedAt
+	for _, captured := range events {
+		if _, err := memory.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("record project-a history: %v", err)
+		}
+	}
+	other := events[0]
+	other.ID = "other-project"
+	if _, err := memory.Record(context.Background(), "project-b", other); err != nil {
+		t.Fatalf("record project-b history: %v", err)
+	}
+
+	first, err := memory.ListIssueEvents(
+		context.Background(), "project-a", events[0].Fingerprint(), EventListOptions{Limit: 2},
+	)
+	if err != nil {
+		t.Fatalf("list first history page: %v", err)
+	}
+	if first.Total != 3 || len(first.Events) != 2 || first.Next == nil {
+		t.Fatalf("first history page = %#v, want two of three retained events", first)
+	}
+	if first.Events[0].ID != "event-04" || first.Events[1].ID != "event-03" {
+		t.Fatalf("first history IDs = %q, %q", first.Events[0].ID, first.Events[1].ID)
+	}
+	second, err := memory.ListIssueEvents(
+		context.Background(), "project-a", events[0].Fingerprint(),
+		EventListOptions{Limit: 2, After: first.Next},
+	)
+	if err != nil {
+		t.Fatalf("list second history page: %v", err)
+	}
+	if len(second.Events) != 1 || second.Events[0].ID != "event-02" || second.Next != nil {
+		t.Fatalf("second history page = %#v, want final retained event", second)
+	}
+	issue, err := memory.GetIssue(context.Background(), "project-a", events[0].Fingerprint())
+	if err != nil {
+		t.Fatalf("get aggregate: %v", err)
+	}
+	if issue.Occurrences != 5 {
+		t.Fatalf("aggregate occurrences = %d, want lifetime count 5", issue.Occurrences)
+	}
+	if _, err := memory.ListIssueEvents(
+		context.Background(), "project-a", "missing", EventListOptions{},
+	); !errors.Is(err, ErrIssueNotFound) {
+		t.Fatalf("missing issue history error = %v, want ErrIssueNotFound", err)
+	}
+}
+
 func TestMemoryRecordIsConcurrencySafe(t *testing.T) {
 	memory := NewMemory()
 	captured := testEvent(time.Now())
@@ -362,4 +414,14 @@ func testEvent(receivedAt time.Time) event.Event {
 		Column:     2,
 		ReceivedAt: receivedAt,
 	}
+}
+
+func historyEvents(base time.Time, count int, message string) []event.Event {
+	events := make([]event.Event, count)
+	for index := range count {
+		events[index] = testEvent(base.Add(time.Duration(index) * time.Minute))
+		events[index].ID = fmt.Sprintf("event-%02d", index)
+		events[index].Message = message
+	}
+	return events
 }
