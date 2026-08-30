@@ -374,6 +374,12 @@ test("parses mixed space-and-tab list padding", () => {
     "- \t```markdown",
     "    [missing](docs/missing.md)",
     "    ```",
+    "> -\t```markdown",
+    ">   [quoted](docs/quoted-missing.md)",
+    ">   ```",
+    "- -\t```markdown",
+    "    [nested](docs/nested-missing.md)",
+    "    ```",
   ].join("\n")), []);
 });
 

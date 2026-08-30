@@ -236,7 +236,7 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
           orderedListCanInterrupt && !orderedListCanInterrupt(containers)) {
         return { content: remaining, containers };
       }
-      remaining = remaining.slice(list.length);
+      remaining = expandTabs(remaining.slice(list.length), list.indent);
       containers.push({
         type: "list",
         indent: list.indent,
@@ -265,7 +265,7 @@ function stripBlockQuoteMarker(line) {
   }
   const whitespaceWidth = column - whitespaceStartColumn;
   const contentIndent = whitespaceWidth > 0 ? whitespaceWidth - 1 : 0;
-  return `${" ".repeat(contentIndent)}${line.slice(index)}`;
+  return `${" ".repeat(contentIndent)}${expandTabs(line.slice(index), column)}`;
 }
 
 function parseContinuedBlockContainers(
@@ -453,7 +453,7 @@ function paragraphContentWithinContainers(line, containers) {
     }
     const marker = listMarkerPrefix(remaining);
     if (marker?.markerIndent === container.markerIndent) {
-      remaining = remaining.slice(marker.length);
+      remaining = expandTabs(remaining.slice(marker.length), marker.indent);
       continue;
     }
     const stripped = stripIndent(remaining, container.indent);
@@ -552,6 +552,22 @@ function indentationWidth(value) {
   return column;
 }
 
+function expandTabs(value, initialColumn) {
+  let column = initialColumn;
+  let expanded = "";
+  for (const character of value) {
+    if (character === "\t") {
+      const width = 4 - (column % 4);
+      expanded += " ".repeat(width);
+      column += width;
+    } else {
+      expanded += character;
+      column++;
+    }
+  }
+  return expanded;
+}
+
 function stripIndent(line, width) {
   let column = 0;
   let index = 0;
@@ -564,7 +580,9 @@ function stripIndent(line, width) {
     }
     index++;
   }
-  return column < width ? null : `${" ".repeat(column - width)}${line.slice(index)}`;
+  return column < width
+    ? null
+    : `${" ".repeat(column - width)}${expandTabs(line.slice(index), column)}`;
 }
 
 function isExternal(target) {
