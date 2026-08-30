@@ -293,10 +293,7 @@
       }
       captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
 
-      const singleBody = safeSerialize({
-        project_key: this.projectKey,
-        events: [captured],
-      });
+      const singleBody = safeSerialize(this.projectKey, [captured]);
       if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
         this.stats.failed++;
         this.stats.dropped++;
@@ -444,10 +441,7 @@
       let rejected = 0;
       for (const captured of pending) {
         const candidate = current.concat([captured]);
-        const candidateBody = safeSerialize({
-          project_key: this.projectKey,
-          events: candidate,
-        });
+        const candidateBody = safeSerialize(this.projectKey, candidate);
         if (candidateBody === null) {
           rejected++;
           continue;
@@ -458,10 +452,7 @@
             continue;
           }
           batches.push(current);
-          const singleBody = safeSerialize({
-            project_key: this.projectKey,
-            events: [captured],
-          });
+          const singleBody = safeSerialize(this.projectKey, [captured]);
           if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
             rejected++;
             current = [];
@@ -484,7 +475,7 @@
 
     sendBatch(events, attempt) {
       const payload = { project_key: this.projectKey, events };
-      const body = safeSerialize(payload);
+      const body = safeSerialize(this.projectKey, events);
       if (body === null) {
         return this.retryBatch(events, attempt);
       }
@@ -730,9 +721,28 @@
     }
   }
 
-  function safeSerialize(value) {
+  function safeSerialize(projectKey, events) {
     try {
-      const serialized = JSON.stringify(value);
+      const serializedEvents = events.map((value) => {
+        const captured = Object.create(null);
+        for (const [key, item] of Object.entries(value)) {
+          if (key === "tags" && item && typeof item === "object") {
+            const tags = Object.create(null);
+            for (const [tagKey, tagValue] of Object.entries(item)) {
+              tags[tagKey] = tagValue;
+            }
+            captured[key] = tags;
+          } else {
+            captured[key] = item;
+          }
+        }
+        return captured;
+      });
+      Object.defineProperty(serializedEvents, "toJSON", { value: undefined });
+      const envelope = Object.create(null);
+      envelope.project_key = projectKey;
+      envelope.events = serializedEvents;
+      const serialized = JSON.stringify(envelope);
       return typeof serialized === "string" ? serialized : null;
     } catch (_) {
       return null;

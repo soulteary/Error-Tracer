@@ -340,31 +340,25 @@ test("capture contains extension and transport failures", async () => {
 });
 
 test("capture contains JSON serialization failures", async () => {
-  const original = Object.prototype.toJSON;
+  const original = JSON.stringify;
   let result;
   try {
-    Object.prototype.toJSON = function failSerialization() {
+    JSON.stringify = function failSerialization() {
       throw new Error("serialization failed");
     };
     result = await testClient().captureMessage("boom");
   } finally {
-    if (original === undefined) {
-      delete Object.prototype.toJSON;
-    } else {
-      Object.prototype.toJSON = original;
-    }
+    JSON.stringify = original;
   }
   assert.equal(result, false);
 });
 
 test("capture rejects a non-string JSON serialization result", async () => {
-  const original = Object.prototype.toJSON;
+  const original = JSON.stringify;
   let result;
   let transports = 0;
   try {
-    Object.prototype.toJSON = function omitSerialization() {
-      return undefined;
-    };
+    JSON.stringify = () => undefined;
     result = await testClient({
       transport() {
         transports++;
@@ -372,14 +366,45 @@ test("capture rejects a non-string JSON serialization result", async () => {
       },
     }).captureMessage("boom");
   } finally {
+    JSON.stringify = original;
+  }
+  assert.equal(result, false);
+  assert.equal(transports, 0);
+});
+
+test("batch serialization ignores inherited toJSON hooks", async () => {
+  const original = Object.prototype.toJSON;
+  const bodies = [];
+  try {
+    for (const replacement of [
+      () => null,
+      () => ({}),
+      () => { throw new Error("inherited hook must not run"); },
+    ]) {
+      Object.prototype.toJSON = replacement;
+      const client = testClient({
+        batchSize: 1,
+        transport(body) {
+          bodies.push(body);
+          return true;
+        },
+      });
+      assert.equal(await client.captureMessage("boom"), true);
+    }
+  } finally {
     if (original === undefined) {
       delete Object.prototype.toJSON;
     } else {
       Object.prototype.toJSON = original;
     }
   }
-  assert.equal(result, false);
-  assert.equal(transports, 0);
+  assert.equal(bodies.length, 3);
+  for (const body of bodies) {
+    const payload = JSON.parse(body);
+    assert.equal(payload.project_key, PROJECT_KEY);
+    assert.equal(payload.events.length, 1);
+    assert.equal(payload.events[0].message, "boom");
+  }
 });
 
 test("automatically captures runtime, resource, and rejection failures", async () => {
