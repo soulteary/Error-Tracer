@@ -37,6 +37,41 @@ func TestNormalizeRemovesSensitiveURLComponents(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsMalformedURLs(t *testing.T) {
+	captured := Event{
+		Kind:      KindError,
+		Message:   "failed",
+		SourceURL: "https://user:secret@example.com/%zz?token=secret#fragment",
+		PageURL:   "https://example.com/%zz?session=secret#fragment",
+	}
+
+	captured.Normalize()
+
+	if captured.SourceURL != "" || captured.PageURL != "" {
+		t.Fatalf(
+			"malformed URLs survived normalization: source=%q page=%q",
+			captured.SourceURL, captured.PageURL,
+		)
+	}
+	if err := captured.Validate(); err != nil {
+		t.Fatalf("Validate() returned %v after dropping optional malformed URLs", err)
+	}
+}
+
+func TestNormalizeRejectsMalformedResourceURL(t *testing.T) {
+	captured := Event{
+		Kind:      KindResourceError,
+		SourceURL: "https://user:secret@example.com/%zz?token=secret#fragment",
+	}
+	captured.Normalize()
+
+	err := captured.Validate()
+	var validationErr *ValidationError
+	if !errors.As(err, &validationErr) || validationErr.Field != "source_url" {
+		t.Fatalf("Validate() error = %v, want source_url validation error", err)
+	}
+}
+
 func TestNormalizeResolvesTagKeyCollisionsDeterministically(t *testing.T) {
 	tests := []struct {
 		name string
@@ -167,6 +202,48 @@ func TestFingerprintUsesFirstStackFrame(t *testing.T) {
 	otherFirefox.Stack = "payment@https://example.com/app.js:40:7"
 	if firefox.Fingerprint() == otherFirefox.Fingerprint() {
 		t.Fatal("different Firefox stack frames produced the same fingerprint")
+	}
+
+	safari := first
+	safari.Stack = "global code@https://example.com/app.js:10:2"
+	otherSafari := safari
+	otherSafari.Stack = "global code@https://example.com/app.js:40:7"
+	if safari.Fingerprint() == otherSafari.Fingerprint() {
+		t.Fatal("different Safari stack frames produced the same fingerprint")
+	}
+}
+
+func TestFingerprintSkipsAtSignInErrorHeader(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "request failed",
+		Stack:   "Error: request for alice@example.com failed\n    at checkout (app.js:10:2)",
+	}
+	second := first
+	second.Stack = "Error: request for alice@example.com failed\n    at payment (app.js:40:7)"
+
+	if first.Fingerprint() == second.Fingerprint() {
+		t.Fatal("an at-sign in the error header hid different V8 stack frames")
+	}
+}
+
+func TestFingerprintCanonicalizesStackFrameURL(t *testing.T) {
+	first := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   "Error: boom\n    at run (https://example.com/app.js?v=1#old:10:2)",
+	}
+	second := first
+	second.Stack = "Error: boom\n    at run (https://example.com/app.js?v=2#new:10:2)"
+
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("a cache-busting stack-frame URL changed the fingerprint")
+	}
+
+	first.Stack = "run@https://example.com/app.js?v=1#old:10:2"
+	second.Stack = "run@https://example.com/app.js?v=2#new:10:2"
+	if first.Fingerprint() != second.Fingerprint() {
+		t.Fatal("a cache-busting Firefox stack-frame URL changed the fingerprint")
 	}
 }
 

@@ -257,6 +257,29 @@ func TestFromEnvironmentRejectsInvalidOrigins(t *testing.T) {
 	}
 }
 
+func TestParseOriginsRemovesDefaultPorts(t *testing.T) {
+	origins, err := parseOrigins(strings.Join([]string{
+		"https://app.example.com:443",
+		"https://app.example.com",
+		"http://localhost:80",
+		"http://localhost",
+		"https://app.example.com:8443",
+		"http://[::1]:80",
+	}, ","))
+	if err != nil {
+		t.Fatalf("parseOrigins() error = %v", err)
+	}
+	want := []string{
+		"https://app.example.com",
+		"http://localhost",
+		"https://app.example.com:8443",
+		"http://[::1]",
+	}
+	if !reflect.DeepEqual(origins, want) {
+		t.Fatalf("parseOrigins() = %#v, want %#v", origins, want)
+	}
+}
+
 func TestFromEnvironmentRejectsInvalidRateLimits(t *testing.T) {
 	tests := []struct {
 		name     string

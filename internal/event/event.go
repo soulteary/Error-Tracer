@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -201,7 +202,10 @@ func sanitizeURL(value string) string {
 	}
 	parsed, err := url.Parse(value)
 	if err != nil {
-		return value
+		// Never persist an unparseable client-controlled URL. In particular,
+		// malformed percent escapes can otherwise preserve userinfo, queries,
+		// and fragments that the normal parsed path removes.
+		return ""
 	}
 	parsed.User = nil
 	parsed.RawQuery = ""
@@ -220,11 +224,45 @@ func firstStackFrame(stack string) string {
 		if firstLine == "" {
 			firstLine = line
 		}
-		if strings.HasPrefix(line, "at ") || strings.Contains(line, "@") {
-			return line
+		if strings.HasPrefix(line, "at ") {
+			return canonicalizeStackFrame(line)
+		}
+		if firefoxStackFramePattern.MatchString(line) {
+			return canonicalizeStackFrame(line)
 		}
 	}
 	return firstLine
+}
+
+var firefoxStackFramePattern = regexp.MustCompile(`^[^@]*@[^\s@]+:\d+(?::\d+)?$`)
+
+func canonicalizeStackFrame(frame string) string {
+	if strings.HasPrefix(frame, "at ") {
+		if open := strings.LastIndexByte(frame, '('); open >= 3 && strings.HasSuffix(frame, ")") {
+			return frame[:open+1] + canonicalizeStackLocation(frame[open+1:len(frame)-1]) + ")"
+		}
+		return "at " + canonicalizeStackLocation(strings.TrimSpace(strings.TrimPrefix(frame, "at ")))
+	}
+
+	at := strings.LastIndexByte(frame, '@')
+	if at < 0 {
+		return frame
+	}
+	return frame[:at+1] + canonicalizeStackLocation(frame[at+1:])
+}
+
+var stackPositionPattern = regexp.MustCompile(`:\d+(?::\d+)?$`)
+
+func canonicalizeStackLocation(location string) string {
+	position := ""
+	if match := stackPositionPattern.FindStringIndex(location); match != nil {
+		position = location[match[0]:]
+		location = location[:match[0]]
+	}
+	if index := strings.IndexAny(location, "?#"); index >= 0 {
+		location = location[:index]
+	}
+	return location + position
 }
 
 func bounded(field, value string, limit int) error {

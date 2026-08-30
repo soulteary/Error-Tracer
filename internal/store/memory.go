@@ -210,7 +210,7 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 	options = normalizeListOptions(options)
 
 	m.mu.RLock()
-	issues := make([]Issue, 0, len(m.issues))
+	issues := make([]Issue, 0)
 	for _, issue := range m.issues {
 		if issue.ProjectID == projectID &&
 			(options.Status == "" || issue.Status == options.Status) {
