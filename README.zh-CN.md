@@ -112,10 +112,17 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 2 次。可通过 `batchSize`、`flushInterval`、`maxQueueSize`、`maxRetries`、
 `retryBaseDelay` 和 `maxBatchBytes` 调整这些边界。
 
+`maxBatchBytes` 默认为 60 KiB，以满足不同浏览器对 `sendBeacon`/fetch
+keepalive 请求体的通用限制。可以配置更大的值，但超过 keepalive 边界的载荷
+会改用普通 fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。
+单个事件若无法放入自身的批次，会直接丢弃并计入客户端统计，而不会发送超限
+请求。
+
 在可控的页面关闭流程中，可调用 `await tracer.flush()` 并检查返回值；
 `tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。
 `captureMessage` 或 `captureException` 成功只表示未满批次已进入本地队列，
-`flush()` 才表示本轮所有批次是否都被传输层接受。客户端还支持
+`flush()` 才表示本轮所有批次是否都被传输层接受。如果已有 flush 正在执行，
+返回的 Promise 还会等待调用 `flush()` 时已排队的事件。客户端还支持
 `sampleRate`、`maxEventsPerMinute`、`beforeSend`、`batchEndpoint` 和自定义
 批量 `transport`。事件进入队列前，可使用 `beforeSend` 删除业务特有的敏感值。
 

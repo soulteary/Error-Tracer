@@ -146,6 +146,32 @@ test("beforeSend can modify or drop an event", async () => {
   assert.deepEqual(events[0].tags, { filtered: "yes" });
 });
 
+test("beforeSend can remove default context", async () => {
+  let captured;
+  const client = testClient({
+    release: "web@1",
+    environment: "production",
+    tags: { region: "us-east-1" },
+    beforeSend(event) {
+      delete event.page_url;
+      delete event.release;
+      delete event.environment;
+      delete event.tags;
+      return event;
+    },
+    transport(_body, payload) {
+      captured = payload.events[0];
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("redacted"), true);
+  assert.equal("page_url" in captured, false);
+  assert.equal("release" in captured, false);
+  assert.equal("environment" in captured, false);
+  assert.equal("tags" in captured, false);
+});
+
 test("sampling and the per-minute budget bound traffic", async () => {
   let sent = 0;
   const sampledOut = testClient({
@@ -248,6 +274,41 @@ test("default transport falls back to credential-free fetch", async () => {
   assert.equal(JSON.parse(request.options.body).events[0].message, "boom");
 });
 
+test("default transport disables keepalive for large payloads", async () => {
+  let beaconCalled = false;
+  let request;
+  const runtime = {
+    location: { href: "https://app.example/page" },
+    navigator: {
+      sendBeacon() {
+        beaconCalled = true;
+        return true;
+      },
+    },
+    Blob,
+    fetch(endpoint, options) {
+      request = { endpoint, options };
+      return Promise.resolve({ ok: true });
+    },
+  };
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    random: () => 0,
+    clock: () => FIXED_TIME,
+    batchSize: 1,
+    maxBatchBytes: 128 * 1024,
+  });
+
+  assert.equal(await client.capture({
+    kind: "error",
+    message: "boom",
+    stack: "x".repeat(63 * 1024),
+  }), true);
+  assert.equal(beaconCalled, false);
+  assert.equal(request.options.keepalive, false);
+});
+
 test("capture contains extension and transport failures", async () => {
   const badRandom = testClient({
     random() {
@@ -276,6 +337,24 @@ test("capture contains extension and transport failures", async () => {
     },
   });
   assert.equal(await testClient().capture(hostile), false);
+});
+
+test("capture contains JSON serialization failures", async () => {
+  const original = Object.prototype.toJSON;
+  let result;
+  try {
+    Object.prototype.toJSON = function failSerialization() {
+      throw new Error("serialization failed");
+    };
+    result = await testClient().captureMessage("boom");
+  } finally {
+    if (original === undefined) {
+      delete Object.prototype.toJSON;
+    } else {
+      Object.prototype.toJSON = original;
+    }
+  }
+  assert.equal(result, false);
 });
 
 test("automatically captures runtime, resource, and rejection failures", async () => {
@@ -345,6 +424,7 @@ test("automatic capture can be installed and destroyed idempotently", () => {
   assert.equal(runtime.listenerCount("error"), 1);
   assert.equal(runtime.listenerCount("unhandledrejection"), 1);
   assert.equal(runtime.listenerCount("pagehide"), 1);
+  assert.equal(runtime.document.listenerCount("visibilitychange"), 1);
 
   client.destroy();
   client.destroy();
@@ -352,6 +432,33 @@ test("automatic capture can be installed and destroyed idempotently", () => {
   assert.equal(runtime.listenerCount("error"), 0);
   assert.equal(runtime.listenerCount("unhandledrejection"), 0);
   assert.equal(runtime.listenerCount("pagehide"), 0);
+  assert.equal(runtime.document.listenerCount("visibilitychange"), 0);
+});
+
+test("automatic capture rolls back partial listener installation", () => {
+  const listeners = new Map();
+  const runtime = {
+    addEventListener(type, listener) {
+      if (type === "unhandledrejection") {
+        throw new Error("registration failed");
+      }
+      listeners.set(type, listener);
+    },
+    removeEventListener(type, listener) {
+      if (listeners.get(type) === listener) {
+        listeners.delete(type);
+      }
+    },
+  };
+  const client = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    runtime,
+    autoCapture: false,
+  });
+
+  assert.equal(client.install(), false);
+  assert.equal(client.installed, false);
+  assert.equal(listeners.size, 0);
 });
 
 test("serializes plain-object rejection reasons", async () => {
@@ -421,6 +528,23 @@ test("splits a queue before the configured request-size limit", async () => {
   assert.deepEqual(payloads.map((payload) => payload.events.length), [1, 1]);
 });
 
+test("drops an event that exceeds maxBatchBytes by itself", async () => {
+  let transportCalled = false;
+  const client = testClient({
+    maxBatchBytes: 1024,
+    transport() {
+      transportCalled = true;
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("x".repeat(2000)), false);
+  assert.equal(transportCalled, false);
+  assert.deepEqual(client.getStats(), {
+    queued: 0, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+  });
+});
+
 test("flushes a partial queue after the configured interval", async () => {
   let scheduled;
   const payloads = [];
@@ -485,6 +609,40 @@ test("bounds the queue while another batch is in flight", async () => {
   });
 });
 
+test("flush waits for events queued during an active delivery", async () => {
+  let releaseFirst;
+  let releaseSecond;
+  const deliveries = [
+    new Promise((resolve) => { releaseFirst = resolve; }),
+    new Promise((resolve) => { releaseSecond = resolve; }),
+  ];
+  const messages = [];
+  const client = testClient({
+    transport(_body, payload) {
+      messages.push(payload.events[0].message);
+      return deliveries[messages.length - 1];
+    },
+  });
+
+  const firstCapture = client.captureMessage("one");
+  assert.equal(await client.captureMessage("two"), true);
+  let flushResolved = false;
+  const flush = client.flush().then((accepted) => {
+    flushResolved = true;
+    return accepted;
+  });
+
+  releaseFirst(true);
+  assert.equal(await firstCapture, true);
+  await eventLoopTurn();
+  assert.deepEqual(messages, ["one", "two"]);
+  assert.equal(flushResolved, false);
+
+  releaseSecond(true);
+  assert.equal(await flush, true);
+  assert.equal(flushResolved, true);
+});
+
 test("retries failed batches with a finite budget", async () => {
   let attempts = 0;
   const runtime = {
@@ -534,6 +692,32 @@ test("pagehide flushes a partial queue", async () => {
   assert.equal(payloads[0].events[0].message, "leaving");
 });
 
+test("visibilitychange flushes when the document becomes hidden", async () => {
+  const payloads = [];
+  const runtime = fakeRuntime();
+  const client = testClient({
+    runtime,
+    batchSize: 10,
+    flushInterval: 0,
+    transport(_body, payload) {
+      payloads.push(payload);
+      return true;
+    },
+  });
+
+  assert.equal(await client.captureMessage("backgrounded"), true);
+  runtime.document.visibilityState = "visible";
+  runtime.document.dispatch("visibilitychange", {});
+  await eventLoopTurn();
+  assert.equal(payloads.length, 0);
+
+  runtime.document.visibilityState = "hidden";
+  runtime.document.dispatch("visibilitychange", {});
+  await eventLoopTurn();
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].events[0].message, "backgrounded");
+});
+
 function testClient(overrides) {
   return ErrorTracer.init({
     projectKey: PROJECT_KEY,
@@ -549,9 +733,17 @@ function testClient(overrides) {
 }
 
 function fakeRuntime() {
+  const runtimeTarget = fakeEventTarget();
+  const documentTarget = fakeEventTarget();
+  return Object.assign(runtimeTarget, {
+    location: { href: "https://app.example/page?secret=1#fragment" },
+    document: Object.assign(documentTarget, { visibilityState: "visible" }),
+  });
+}
+
+function fakeEventTarget() {
   const listeners = new Map();
   return {
-    location: { href: "https://app.example/page?secret=1#fragment" },
     addEventListener(type, listener) {
       const registered = listeners.get(type) || new Set();
       registered.add(listener);

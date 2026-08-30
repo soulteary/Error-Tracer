@@ -20,6 +20,7 @@
     tagKey: 64,
     tagValue: 256,
   });
+  const KEEPALIVE_BODY_LIMIT = 60 * 1024;
   const EVENT_KINDS = new Set(["error", "unhandled_rejection", "resource_error"]);
 
   class Client {
@@ -72,7 +73,7 @@
         options.retryBaseDelay, 250, 1, 10_000, "retryBaseDelay",
       );
       this.maxBatchBytes = integerOption(
-        options.maxBatchBytes, 512 * 1024, 1024, 900 * 1024, "maxBatchBytes",
+        options.maxBatchBytes, KEEPALIVE_BODY_LIMIT, 1024, 900 * 1024, "maxBatchBytes",
       );
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);
@@ -104,6 +105,12 @@
       this.errorListener = (event) => this.captureWindowError(event);
       this.rejectionListener = (event) => this.captureUnhandledRejection(event);
       this.pagehideListener = () => this.settle(this.flush());
+      this.visibilityTarget = safeRead(this.runtime, "document") || null;
+      this.visibilityListener = () => {
+        if (safeRead(this.visibilityTarget, "visibilityState") === "hidden") {
+          this.settle(this.flush());
+        }
+      };
       if (options.autoCapture !== false) {
         this.install();
       }
@@ -117,9 +124,30 @@
           typeof this.runtime.removeEventListener !== "function") {
         return false;
       }
-      this.runtime.addEventListener("error", this.errorListener, true);
-      this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
-      this.runtime.addEventListener("pagehide", this.pagehideListener, false);
+      const installed = [];
+      try {
+        this.runtime.addEventListener("error", this.errorListener, true);
+        installed.push([this.runtime, "error", this.errorListener, true]);
+        this.runtime.addEventListener("unhandledrejection", this.rejectionListener, false);
+        installed.push([this.runtime, "unhandledrejection", this.rejectionListener, false]);
+        this.runtime.addEventListener("pagehide", this.pagehideListener, false);
+        installed.push([this.runtime, "pagehide", this.pagehideListener, false]);
+        if (this.visibilityTarget &&
+            typeof safeRead(this.visibilityTarget, "addEventListener") === "function" &&
+            typeof safeRead(this.visibilityTarget, "removeEventListener") === "function") {
+          this.visibilityTarget.addEventListener(
+            "visibilitychange", this.visibilityListener, false,
+          );
+          installed.push([
+            this.visibilityTarget, "visibilitychange", this.visibilityListener, false,
+          ]);
+        }
+      } catch (_) {
+        for (const registration of installed.reverse()) {
+          removeListener(...registration);
+        }
+        return false;
+      }
       this.installed = true;
       return true;
     }
@@ -127,9 +155,12 @@
     destroy() {
       if (this.installed && this.runtime &&
           typeof this.runtime.removeEventListener === "function") {
-        this.runtime.removeEventListener("error", this.errorListener, true);
-        this.runtime.removeEventListener("unhandledrejection", this.rejectionListener, false);
-        this.runtime.removeEventListener("pagehide", this.pagehideListener, false);
+        removeListener(this.runtime, "error", this.errorListener, true);
+        removeListener(this.runtime, "unhandledrejection", this.rejectionListener, false);
+        removeListener(this.runtime, "pagehide", this.pagehideListener, false);
+        removeListener(
+          this.visibilityTarget, "visibilitychange", this.visibilityListener, false,
+        );
       }
       this.clearFlushTimer();
       this.settle(this.flush());
@@ -227,7 +258,7 @@
 
       let captured;
       try {
-        captured = this.normalize(candidate);
+        captured = this.normalize(candidate, true);
       } catch (_) {
         return Promise.resolve(false);
       }
@@ -244,7 +275,7 @@
           return Promise.resolve(false);
         }
         try {
-          captured = this.normalize(captured);
+          captured = this.normalize(captured, false);
         } catch (_) {
           return Promise.resolve(false);
         }
@@ -275,7 +306,7 @@
       return Promise.resolve(true);
     }
 
-    normalize(candidate) {
+    normalize(candidate, applyDefaults) {
       if (!candidate || typeof candidate !== "object") {
         return null;
       }
@@ -293,10 +324,9 @@
         return null;
       }
 
-      const pageURL = truncateUTF8(
-        scrubURL(safeRead(candidate, "page_url") || readLocation(this.runtime), this.runtime),
-        LIMITS.url,
-      );
+      const pageValue = safeRead(candidate, "page_url") ||
+        (applyDefaults ? readLocation(this.runtime) : "");
+      const pageURL = truncateUTF8(scrubURL(pageValue, this.runtime), LIMITS.url);
       return compactObject({
         kind,
         message,
@@ -307,14 +337,18 @@
         column: nonNegativeInteger(safeRead(candidate, "column")),
         occurred_at: validISODate(safeRead(candidate, "occurred_at")),
         release: truncateUTF8(
-          cleanString(safeRead(candidate, "release") || this.release),
+          cleanString(safeRead(candidate, "release") || (applyDefaults ? this.release : "")),
           LIMITS.release,
         ),
         environment: truncateUTF8(
-          cleanString(safeRead(candidate, "environment") || this.environment),
+          cleanString(
+            safeRead(candidate, "environment") || (applyDefaults ? this.environment : ""),
+          ),
           LIMITS.environment,
         ),
-        tags: normalizeTags(mergeTags(this.tags, safeRead(candidate, "tags"))),
+        tags: normalizeTags(applyDefaults
+          ? mergeTags(this.tags, safeRead(candidate, "tags"))
+          : safeRead(candidate, "tags")),
       });
     }
 
@@ -340,7 +374,12 @@
 
     flush() {
       if (this.flushPromise) {
-        return this.flushPromise;
+        const active = this.flushPromise;
+        if (!this.queue.length) {
+          return active;
+        }
+        return active.then((accepted) =>
+          this.flush().then((drained) => accepted && drained));
       }
       this.clearFlushTimer();
       if (!this.queue.length) {
@@ -359,26 +398,48 @@
     }
 
     sendPending(pending) {
-      const batches = this.makeBatches(pending);
-      return batches.reduce(
+      const grouped = this.makeBatches(pending);
+      if (grouped.rejected) {
+        this.stats.failed += grouped.rejected;
+        this.stats.dropped += grouped.rejected;
+      }
+      return grouped.batches.reduce(
         (result, events) => result.then((accepted) =>
           this.sendBatch(events, 0).then((batchAccepted) => accepted && batchAccepted)),
-        Promise.resolve(true),
+        Promise.resolve(grouped.rejected === 0),
       );
     }
 
     makeBatches(pending) {
       const batches = [];
       let current = [];
+      let rejected = 0;
       for (const captured of pending) {
         const candidate = current.concat([captured]);
-        const candidateBody = JSON.stringify({
+        const candidateBody = safeSerialize({
           project_key: this.projectKey,
           events: candidate,
         });
-        if (current.length && utf8Length(candidateBody) > this.maxBatchBytes) {
+        if (candidateBody === null) {
+          rejected++;
+          continue;
+        }
+        if (utf8Length(candidateBody) > this.maxBatchBytes) {
+          if (!current.length) {
+            rejected++;
+            continue;
+          }
           batches.push(current);
-          current = [captured];
+          const singleBody = safeSerialize({
+            project_key: this.projectKey,
+            events: [captured],
+          });
+          if (singleBody === null || utf8Length(singleBody) > this.maxBatchBytes) {
+            rejected++;
+            current = [];
+          } else {
+            current = [captured];
+          }
         } else {
           current = candidate;
         }
@@ -390,12 +451,15 @@
       if (current.length) {
         batches.push(current);
       }
-      return batches;
+      return { batches, rejected };
     }
 
     sendBatch(events, attempt) {
       const payload = { project_key: this.projectKey, events };
-      const body = JSON.stringify(payload);
+      const body = safeSerialize(payload);
+      if (body === null) {
+        return this.retryBatch(events, attempt);
+      }
       let result;
       try {
         result = Promise.resolve(this.transport(body, payload));
@@ -493,10 +557,12 @@
 
   function defaultTransport(runtime, endpoint) {
     return function send(body) {
+      const keepalive = utf8Length(body) <= KEEPALIVE_BODY_LIMIT;
       const navigator = safeRead(runtime, "navigator");
       const BlobConstructor = safeRead(runtime, "Blob");
       const sendBeacon = safeRead(navigator, "sendBeacon");
-      if (typeof sendBeacon === "function" && typeof BlobConstructor === "function") {
+      if (keepalive && typeof sendBeacon === "function" &&
+          typeof BlobConstructor === "function") {
         try {
           const blob = new BlobConstructor([body], { type: "text/plain;charset=UTF-8" });
           if (sendBeacon.call(navigator, endpoint, blob)) {
@@ -516,7 +582,7 @@
         headers: { "Content-Type": "application/json" },
         body,
         credentials: "omit",
-        keepalive: true,
+        keepalive,
       }).then((response) => Boolean(response && response.ok));
     };
   }
@@ -622,6 +688,25 @@
       return location ? cleanString(safeRead(location, "href")) : "";
     } catch (_) {
       return "";
+    }
+  }
+
+  function removeListener(target, type, listener, options) {
+    try {
+      const remove = safeRead(target, "removeEventListener");
+      if (typeof remove === "function") {
+        remove.call(target, type, listener, options);
+      }
+    } catch (_) {
+      // Listener cleanup is best-effort and must not escape into the host page.
+    }
+  }
+
+  function safeSerialize(value) {
+    try {
+      return JSON.stringify(value);
+    } catch (_) {
+      return null;
     }
   }
 

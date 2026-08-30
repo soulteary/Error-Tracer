@@ -126,12 +126,21 @@ retried twice with exponential backoff. These bounds can be changed with
 `batchSize`, `flushInterval`, `maxQueueSize`, `maxRetries`,
 `retryBaseDelay`, and `maxBatchBytes`.
 
+`maxBatchBytes` defaults to 60 KiB so unload-time requests stay within the
+portable `sendBeacon`/fetch keepalive budget. A larger custom value is allowed,
+but payloads above that keepalive budget use a normal fetch and therefore need
+an explicit `await tracer.flush()` when delivery must be observed. An event
+that cannot fit in its own configured batch is dropped and counted in the
+client statistics instead of being sent as an oversized request.
+
 Call `await tracer.flush()` before a controlled shutdown when delivery should
 be observed, and use `tracer.getStats()` to inspect queued, sent, retried,
 failed, and dropped counts. A successful `captureMessage` or
 `captureException` means that a partial batch was accepted into the local
 queue; `flush()` reports whether every batch in that flush was accepted by the
-transport. The client also supports `sampleRate`, `maxEventsPerMinute`,
+transport. If another flush is already active, the returned promise also waits
+for events that were queued when `flush()` was called. The client also supports
+`sampleRate`, `maxEventsPerMinute`,
 `beforeSend`, `batchEndpoint`, and a custom batch `transport`. Use
 `beforeSend` to remove application-specific sensitive values before an event
 enters the queue.
