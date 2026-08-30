@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -275,6 +276,105 @@ func TestGetIssue(t *testing.T) {
 	}
 	if result.Issue.Fingerprint != stored.Fingerprint {
 		t.Fatalf("fingerprint = %q, want %q", result.Issue.Fingerprint, stored.Fingerprint)
+	}
+}
+
+func TestListIssueEventsRequiresAdminAndUsesOpaqueCursor(t *testing.T) {
+	memory := store.NewMemory()
+	base := time.Date(2026, time.August, 30, 1, 0, 0, 0, time.UTC)
+	var fingerprint string
+	for index := range 3 {
+		captured := event.Event{
+			ID:         "event-" + strconv.Itoa(index),
+			Kind:       event.KindError,
+			Message:    "history",
+			ReceivedAt: base.Add(time.Duration(index) * time.Minute),
+		}
+		stored, err := memory.Record(context.Background(), "project-a", captured)
+		if err != nil {
+			t.Fatalf("record event history: %v", err)
+		}
+		fingerprint = stored.Fingerprint
+	}
+	app := New(Options{
+		Store: memory, ProjectID: "project-a",
+		IngestKey: "0123456789abcdef", AdminToken: testAdminToken,
+	})
+	target := "/api/v1/issues/" + fingerprint + "/events?limit=2"
+
+	unauthorized := httptest.NewRecorder()
+	app.Handler().ServeHTTP(
+		unauthorized, httptest.NewRequest(http.MethodGet, target, nil),
+	)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	firstResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(firstResponse, authorizedRequest(http.MethodGet, target))
+	if firstResponse.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d; body = %s", firstResponse.Code, http.StatusOK, firstResponse.Body.String())
+	}
+	var first eventPageResponse
+	if err := json.NewDecoder(firstResponse.Body).Decode(&first); err != nil {
+		t.Fatalf("decode first page: %v", err)
+	}
+	if first.Total != 3 || len(first.Events) != 2 || first.NextCursor == "" {
+		t.Fatalf("first page = %#v, want two of three events and a cursor", first)
+	}
+	if first.Events[0].ID != "event-2" || first.Events[1].ID != "event-1" {
+		t.Fatalf("first event IDs = %q, %q", first.Events[0].ID, first.Events[1].ID)
+	}
+
+	secondResponse := httptest.NewRecorder()
+	app.Handler().ServeHTTP(secondResponse, authorizedRequest(
+		http.MethodGet, target+"&cursor="+first.NextCursor,
+	))
+	var second eventPageResponse
+	if err := json.NewDecoder(secondResponse.Body).Decode(&second); err != nil {
+		t.Fatalf("decode second page: %v", err)
+	}
+	if len(second.Events) != 1 || second.Events[0].ID != "event-0" || second.NextCursor != "" {
+		t.Fatalf("second page = %#v, want final event", second)
+	}
+}
+
+func TestListIssueEventsRejectsInvalidRequests(t *testing.T) {
+	valid := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		target string
+		status int
+	}{
+		{target: "/api/v1/issues/invalid/events", status: http.StatusBadRequest},
+		{target: "/api/v1/issues/" + valid + "/events", status: http.StatusNotFound},
+		{target: "/api/v1/issues/" + valid + "/events?limit=0", status: http.StatusBadRequest},
+		{target: "/api/v1/issues/" + valid + "/events?cursor=invalid", status: http.StatusBadRequest},
+	} {
+		response := httptest.NewRecorder()
+		newTestServer().Handler().ServeHTTP(
+			response, authorizedRequest(http.MethodGet, test.target),
+		)
+		if response.Code != test.status {
+			t.Fatalf("%s: status = %d, want %d", test.target, response.Code, test.status)
+		}
+	}
+}
+
+func TestEventCursorRoundTrip(t *testing.T) {
+	want := store.EventCursor{
+		ReceivedAt: time.Date(2026, time.August, 30, 2, 3, 4, 567, time.UTC),
+		Sequence:   42,
+	}
+	encoded := encodeEventCursor(&want)
+	if encoded == "" || strings.ContainsAny(encoded, "+/=") {
+		t.Fatalf("encoded cursor = %q, want raw URL-safe base64", encoded)
+	}
+	got, err := decodeEventCursor(encoded)
+	if err != nil {
+		t.Fatalf("decodeEventCursor() error = %v", err)
+	}
+	if !got.ReceivedAt.Equal(want.ReceivedAt) || got.Sequence != want.Sequence {
+		t.Fatalf("decoded cursor = %#v, want %#v", got, want)
 	}
 }
 

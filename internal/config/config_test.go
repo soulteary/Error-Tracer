@@ -11,6 +11,7 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	t.Setenv("ERROR_TRACER_ADDRESS", "")
 	t.Setenv("ERROR_TRACER_DATABASE_PATH", "")
 	t.Setenv("ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS", "")
+	t.Setenv("ERROR_TRACER_MAX_EVENTS_PER_ISSUE", "")
 	t.Setenv("ERROR_TRACER_PROJECT_ID", "")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "development-key-1")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "development-admin-token-1")
@@ -34,6 +35,9 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	}
 	if cfg.SQLiteMaxOpenConnections != 4 {
 		t.Fatalf("SQLiteMaxOpenConnections = %d, want 4", cfg.SQLiteMaxOpenConnections)
+	}
+	if cfg.MaxEventsPerIssue != 100 {
+		t.Fatalf("MaxEventsPerIssue = %d, want 100", cfg.MaxEventsPerIssue)
 	}
 	if cfg.ShutdownTimeout != 10*time.Second {
 		t.Fatalf("ShutdownTimeout = %s, want %s", cfg.ShutdownTimeout, 10*time.Second)
@@ -59,6 +63,7 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	t.Setenv("ERROR_TRACER_ADDRESS", " 127.0.0.1:9090 ")
 	t.Setenv("ERROR_TRACER_DATABASE_PATH", " /var/lib/error-tracer/events.db ")
 	t.Setenv("ERROR_TRACER_SQLITE_MAX_OPEN_CONNECTIONS", " 8 ")
+	t.Setenv("ERROR_TRACER_MAX_EVENTS_PER_ISSUE", " 250 ")
 	t.Setenv("ERROR_TRACER_PROJECT_ID", " project-a ")
 	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
 	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", " 0123456789abcdefghijklmn ")
@@ -82,6 +87,9 @@ func TestFromEnvironmentReadsAddress(t *testing.T) {
 	}
 	if cfg.SQLiteMaxOpenConnections != 8 {
 		t.Fatalf("SQLiteMaxOpenConnections = %d, want 8", cfg.SQLiteMaxOpenConnections)
+	}
+	if cfg.MaxEventsPerIssue != 250 {
+		t.Fatalf("MaxEventsPerIssue = %d, want 250", cfg.MaxEventsPerIssue)
 	}
 	if cfg.ProjectID != "project-a" {
 		t.Fatalf("ProjectID = %q, want %q", cfg.ProjectID, "project-a")
@@ -275,6 +283,19 @@ func TestFromEnvironmentRejectsInvalidSQLiteConnectionCount(t *testing.T) {
 			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
 			if _, err := FromEnvironment(); err == nil {
 				t.Fatalf("FromEnvironment() error = nil for SQLite connections %q", value)
+			}
+		})
+	}
+}
+
+func TestFromEnvironmentRejectsInvalidEventHistoryLimit(t *testing.T) {
+	for _, value := range []string{"0", "-1", "many", "1001"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_MAX_EVENTS_PER_ISSUE", value)
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+			if _, err := FromEnvironment(); err == nil {
+				t.Fatalf("FromEnvironment() error = nil for event history limit %q", value)
 			}
 		})
 	}
