@@ -61,7 +61,8 @@ export function markdownTargets(contents) {
 function referenceDefinitionAt(lines, index, checkParagraphInterruption = true) {
   const parsedLine = parseBlockContainers(lines[index]);
   if (checkParagraphInterruption &&
-      orderedListInterruptsParagraph(lines, index, parsedLine.containers)) {
+      (orderedListInterruptsParagraph(lines, index, parsedLine.containers) ||
+       paragraphOpenBefore(lines, index, parsedLine.containers))) {
     return null;
   }
   const match = parsedLine.content.match(
@@ -287,7 +288,7 @@ function paragraphOpenAfter(line, paragraphOpen) {
     return paragraphOpen;
   }
   if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>|`{3,}|~{3,})/.test(value) ||
-      /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*){3,}|=+[ \t]*)$/.test(value)) {
+      /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
   if (/^ {0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(value)) {

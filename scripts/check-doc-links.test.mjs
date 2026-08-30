@@ -12,8 +12,10 @@ test("extracts inline and reference-definition targets", () => {
   const contents = [
     "[inline](docs/inline.md)",
     "[guide][guide-ref]",
+    "",
     "[guide-ref]: <docs/guide.md> \"Guide\"",
     "![asset][asset-ref]",
+    "",
     "[asset-ref]: images/example.png 'Example'",
   ].join("\n");
 
@@ -153,6 +155,30 @@ test("respects ordered-list paragraph interruption rules", () => {
     "docs/after-blank.md",
     "docs/nested.md",
   ]);
+});
+
+test("does not let reference definitions interrupt paragraphs", () => {
+  assert.deepEqual(markdownTargets([
+    "Top-level paragraph",
+    "[top-level]: docs/not-top-level.md",
+    "",
+    "[after-blank]: docs/after-blank.md",
+    "> Quoted paragraph",
+    "> [quoted]: docs/not-quoted.md",
+    ">",
+    "> [quoted-after-blank]: docs/quoted.md",
+  ].join("\n")), [
+    "docs/after-blank.md",
+    "docs/quoted.md",
+  ]);
+});
+
+test("recognizes short hyphen setext underlines", () => {
+  assert.deepEqual(markdownTargets([
+    "Heading",
+    "-",
+    "2. [after-heading]: docs/after-heading.md",
+  ].join("\n")), ["docs/after-heading.md"]);
 });
 
 test("treats a tab-indented block quote as code", () => {
