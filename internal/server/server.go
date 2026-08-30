@@ -23,6 +23,7 @@ type Server struct {
 	ingestKey      string
 	adminTokens    []string
 	allowedOrigins map[string]struct{}
+	requestLimiter *rateLimiter
 	ingestLimiter  *rateLimiter
 	metrics        *serviceMetrics
 	now            func() time.Time
@@ -67,6 +68,7 @@ func New(options Options) *Server {
 		ingestKey:      options.IngestKey,
 		adminTokens:    adminTokens,
 		allowedOrigins: allowedOrigins,
+		requestLimiter: newRateLimiter(options.RatePerMinute, options.RateBurst),
 		ingestLimiter:  newRateLimiter(options.RatePerMinute, options.RateBurst),
 		now:            time.Now,
 		newID:          randomEventID,

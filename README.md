@@ -183,6 +183,10 @@ modified; all UPSERTs then run in one transaction.
 Rate limiting is charged per event, not per HTTP request. Set
 `ERROR_TRACER_RATE_BURST` to at least the largest batch size clients are allowed
 to submit; a batch whose event count exceeds the configured burst is rejected.
+Each POST also consumes one token from a separate request bucket before parsing,
+using the same rate and burst settings, so malformed and unauthorized traffic
+remains bounded. After authentication and validation, all event tokens for a
+valid single or batch request are charged atomically.
 
 ```json
 {
@@ -293,8 +297,8 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | No | empty | Previous admin token accepted temporarily during rotation |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | No | empty | Comma-separated exact HTTP(S) browser origins |
 | `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
-| `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Ingestion event tokens refilled per minute per direct peer |
-| `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum event-token burst per direct peer |
+| `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Event and pre-validation request tokens refilled per minute per direct peer |
+| `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum burst for each separate event and request bucket per direct peer |
 | `ERROR_TRACER_RETENTION_DAYS` | No | `0` | Delete issues inactive for this many days; `0` disables cleanup |
 | `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 

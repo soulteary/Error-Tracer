@@ -245,6 +245,82 @@ func TestIngestBatchConsumesOneTokenPerEvent(t *testing.T) {
 	}
 }
 
+func TestIngestBatchRetryAfterIncludesTheWholeAtomicCharge(t *testing.T) {
+	now := time.Date(2026, time.August, 30, 20, 0, 0, 0, time.UTC)
+	app := New(Options{
+		Store:         store.NewMemory(),
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     3,
+	})
+	app.requestLimiter.now = func() time.Time { return now }
+	app.ingestLimiter.now = func() time.Time { return now }
+	body := `{"project_key":"0123456789abcdef","events":[` +
+		`{"kind":"error","message":"one"},` +
+		`{"kind":"error","message":"two"},` +
+		`{"kind":"error","message":"three"}]}`
+	submit := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/events/batch", strings.NewReader(body),
+		)
+		request.RemoteAddr = "192.0.2.10:1000"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+
+	if response := submit(); response.Code != http.StatusAccepted {
+		t.Fatalf("initial batch status = %d, want %d", response.Code, http.StatusAccepted)
+	}
+	rejected := submit()
+	if rejected.Code != http.StatusTooManyRequests {
+		t.Fatalf("empty-budget batch status = %d, want %d", rejected.Code, http.StatusTooManyRequests)
+	}
+	if got := rejected.Header().Get("Retry-After"); got != "3" {
+		t.Fatalf("Retry-After = %q, want 3 for the complete batch", got)
+	}
+
+	now = now.Add(3 * time.Second)
+	if response := submit(); response.Code != http.StatusAccepted {
+		t.Fatalf(
+			"batch after advertised delay = %d, want %d; body = %s",
+			response.Code, http.StatusAccepted, response.Body.String(),
+		)
+	}
+}
+
+func TestInvalidIngestRequestsUseASeparateRequestBudget(t *testing.T) {
+	app := New(Options{
+		Store:         store.NewMemory(),
+		ProjectID:     "project-a",
+		IngestKey:     "0123456789abcdef",
+		RatePerMinute: 60,
+		RateBurst:     1,
+	})
+	submit := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/events", strings.NewReader(`{"broken":`),
+		)
+		request.RemoteAddr = "192.0.2.10:1000"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+
+	if response := submit(); response.Code != http.StatusBadRequest {
+		t.Fatalf("first invalid request status = %d, want %d", response.Code, http.StatusBadRequest)
+	}
+	if len(app.ingestLimiter.buckets) != 0 {
+		t.Fatal("invalid request consumed the validated-event budget")
+	}
+	if response := submit(); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("second invalid request status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+}
+
 func TestPreflightDoesNotConsumeIngestBudget(t *testing.T) {
 	app := New(Options{
 		Store:          store.NewMemory(),

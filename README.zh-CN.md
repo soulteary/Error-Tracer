@@ -159,6 +159,9 @@ UPSERT 在同一个事务中执行：
 限流按事件数扣费，而不是按 HTTP 请求数扣费。请将
 `ERROR_TRACER_RATE_BURST` 设置为不小于客户端允许提交的最大批次；事件数
 超过突发量配置的批次会被拒绝。
+每个 POST 在解析前还会从独立的请求令牌桶扣除一个令牌；该桶使用相同的速率和
+突发量配置，以限制格式错误和未授权流量。认证及校验完成后，单事件或批量请求的
+全部事件令牌会一次性原子扣除。
 
 ```json
 {
@@ -250,8 +253,8 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_ADMIN_TOKEN_PREVIOUS` | 否 | 空 | 轮换期间临时接受的旧管理员令牌 |
 | `ERROR_TRACER_ALLOWED_ORIGINS` | 否 | 空 | 逗号分隔的精确 HTTP(S) 浏览器来源 |
 | `ERROR_TRACER_METRICS_ENABLED` | 否 | `false` | 在 `/metrics` 开放无鉴权 Prometheus 指标 |
-| `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟补充的采集事件令牌数 |
-| `ERROR_TRACER_RATE_BURST` | 否 | `30` | 每个直接对等端的事件令牌最大突发量 |
+| `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟分别补充的事件令牌和预校验请求令牌数 |
+| `ERROR_TRACER_RATE_BURST` | 否 | `30` | 每个直接对等端的独立事件桶和请求桶各自最大突发量 |
 | `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
 | `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
 

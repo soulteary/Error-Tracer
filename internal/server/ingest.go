@@ -95,6 +95,9 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
+	if !s.allowIngestTokens(w, request, 1) {
+		return
+	}
 
 	issue, err := s.store.Record(request.Context(), s.projectID, captured)
 	if err != nil {
@@ -153,13 +156,6 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 		})
 		return
 	}
-	// The wrapper has already charged one token so malformed and unauthorized
-	// requests are bounded too. Charge the remainder atomically once the batch
-	// size is trusted.
-	if !s.allowIngestTokens(w, request, len(payload.Events)-1) {
-		return
-	}
-
 	captured := make([]event.Event, len(payload.Events))
 	for index, item := range payload.Events {
 		prepared, err := s.prepareEvent(item, request.UserAgent())
@@ -176,6 +172,9 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 		captured[index] = prepared
+	}
+	if !s.allowIngestTokens(w, request, len(captured)) {
+		return
 	}
 
 	issues, err := s.store.RecordBatch(request.Context(), s.projectID, captured)
