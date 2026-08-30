@@ -222,9 +222,9 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
   let remaining = line.replace(/\r$/, "");
   const containers = [];
   while (true) {
-    const quote = remaining.match(/^ {0,3}>[ \t]?/);
-    if (quote) {
-      remaining = remaining.slice(quote[0].length);
+    const quoteContent = stripBlockQuoteMarker(remaining);
+    if (quoteContent !== null) {
+      remaining = quoteContent;
       containers.push({ type: "quote" });
       continue;
     }
@@ -247,6 +247,25 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
     }
     return { content: remaining, containers };
   }
+}
+
+function stripBlockQuoteMarker(line) {
+  const marker = line.match(/^( {0,3})>/);
+  if (!marker) {
+    return null;
+  }
+  let index = marker[0].length;
+  let column = marker[1].length + 1;
+  const whitespaceStartColumn = column;
+  while (line[index] === " " || line[index] === "\t") {
+    column = line[index] === "\t"
+      ? column + 4 - (column % 4)
+      : column + 1;
+    index++;
+  }
+  const whitespaceWidth = column - whitespaceStartColumn;
+  const contentIndent = whitespaceWidth > 0 ? whitespaceWidth - 1 : 0;
+  return `${" ".repeat(contentIndent)}${line.slice(index)}`;
 }
 
 function parseContinuedBlockContainers(
@@ -415,11 +434,11 @@ function paragraphContentWithinContainers(line, containers) {
   let remaining = line.replace(/\r$/, "");
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^ {0,3}>[ \t]?/);
-      if (!quote) {
+      const quoteContent = stripBlockQuoteMarker(remaining);
+      if (quoteContent === null) {
         return null;
       }
-      remaining = remaining.slice(quote[0].length);
+      remaining = quoteContent;
       continue;
     }
     const marker = listMarkerPrefix(remaining);
@@ -441,11 +460,11 @@ function blockContainerPrefix(line, containers) {
   let count = 0;
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^ {0,3}>[ \t]?/);
-      if (!quote) {
+      const quoteContent = stripBlockQuoteMarker(remaining);
+      if (quoteContent === null) {
         break;
       }
-      remaining = remaining.slice(quote[0].length);
+      remaining = quoteContent;
     } else {
       const stripped = stripIndent(remaining, container.indent);
       if (stripped === null) {
@@ -465,11 +484,11 @@ function startsNewListItem(line, containers) {
   let remaining = line.replace(/\r$/, "");
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^ {0,3}>[ \t]?/);
-      if (!quote) {
+      const quoteContent = stripBlockQuoteMarker(remaining);
+      if (quoteContent === null) {
         return false;
       }
-      remaining = remaining.slice(quote[0].length);
+      remaining = quoteContent;
       continue;
     }
     const marker = listMarkerPrefix(remaining);
@@ -495,11 +514,11 @@ function blankWithinBlockContainers(line, containers) {
   let remaining = line.replace(/\r$/, "");
   for (const container of containers) {
     if (container.type === "quote") {
-      const quote = remaining.match(/^ {0,3}>[ \t]?/);
-      if (!quote) {
+      const quoteContent = stripBlockQuoteMarker(remaining);
+      if (quoteContent === null) {
         return false;
       }
-      remaining = remaining.slice(quote[0].length);
+      remaining = quoteContent;
       continue;
     }
     if (!remaining.trim()) {

@@ -250,6 +250,13 @@ test("treats a tab-indented block quote as code", () => {
   ), []);
 });
 
+test("preserves tab columns after block-quote markers", () => {
+  assert.deepEqual(markdownTargets([
+    ">\t  [code]: docs/not-visible.md",
+    "> \t[visible]: docs/visible.md",
+  ].join("\n")), ["docs/visible.md"]);
+});
+
 test("ignores indented code after list markers", () => {
   assert.deepEqual(markdownTargets([
     "-     [unordered]: docs/unordered-missing.md",
