@@ -53,6 +53,14 @@ test("ignores HTML blocks and resumes after their terminators", () => {
   ]);
 });
 
+test("preserves multiline reference titles after HTML blocks", () => {
+  assert.deepEqual(markdownTargets([
+    "<script></script>",
+    "[missing]: docs/missing.md \"long",
+    "    title\"",
+  ].join("\n")), ["docs/missing.md"]);
+});
+
 test("ignores fenced code nested in block containers", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",

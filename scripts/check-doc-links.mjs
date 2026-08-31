@@ -442,6 +442,7 @@ function paragraphOpenAfter(line, paragraphOpen) {
   }
   if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>)/.test(value) ||
       fencedCodeOpening(value) ||
+      htmlBlockAt(value) ||
       /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
