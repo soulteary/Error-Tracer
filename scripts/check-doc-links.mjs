@@ -7,6 +7,16 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const scriptPath = fileURLToPath(import.meta.url);
+const blankTerminatedHTMLTags = new Set([
+  "address", "article", "aside", "base", "basefont", "blockquote", "body",
+  "caption", "center", "col", "colgroup", "dd", "details", "dialog", "dir",
+  "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form",
+  "frame", "frameset", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+  "header", "hr", "html", "iframe", "legend", "li", "link", "main", "menu",
+  "menuitem", "nav", "noframes", "ol", "optgroup", "option", "p", "param",
+  "search", "section", "summary", "table", "tbody", "td", "tfoot", "th",
+  "thead", "title", "tr", "track", "ul",
+]);
 
 export function checkMarkdownLinks(root, markdownFile, contents) {
   const failures = [];
@@ -639,14 +649,19 @@ function withoutFencedCode(contents) {
       const content = continueBlockContainers(line, htmlBlock.containers);
       if (content !== null) {
         const containers = htmlBlock.containers;
-        if (htmlBlock.terminator.test(content)) {
+        if ((htmlBlock.endsOnBlank && !content.trim()) ||
+            htmlBlock.terminator?.test(content)) {
           htmlBlock = null;
         }
         output.push(maskedContainerLine(containers));
         continue;
       }
       if (blankWithinBlockContainers(line, htmlBlock.containers)) {
-        output.push(maskedContainerLine(htmlBlock.containers));
+        const containers = htmlBlock.containers;
+        if (htmlBlock.endsOnBlank) {
+          htmlBlock = null;
+        }
+        output.push(maskedContainerLine(containers));
         continue;
       }
       htmlBlock = null;
@@ -688,8 +703,10 @@ function withoutFencedCode(contents) {
     }
     const openingHTML = htmlBlockAt(parsed.content);
     if (openingHTML) {
-      if (!openingHTML.terminator.test(parsed.content)) {
+      if (openingHTML.endsOnBlank ||
+          !openingHTML.terminator.test(parsed.content)) {
         htmlBlock = {
+          endsOnBlank: openingHTML.endsOnBlank,
           terminator: openingHTML.terminator,
           containers: parsed.containers,
         };
@@ -752,6 +769,12 @@ function htmlBlockAt(content) {
   }
   if (/^ {0,3}<![A-Z]/.test(content)) {
     return { terminator: />/ };
+  }
+  const blankTerminated = content.match(
+    /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)(?=[ \t]|\/?>|$)/,
+  );
+  if (blankTerminatedHTMLTags.has(blankTerminated?.[1]?.toLowerCase())) {
+    return { endsOnBlank: true };
   }
   return null;
 }

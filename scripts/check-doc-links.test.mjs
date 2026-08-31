@@ -61,6 +61,22 @@ test("preserves multiline reference titles after HTML blocks", () => {
   ].join("\n")), ["docs/missing.md"]);
 });
 
+test("ignores blank-terminated type-6 HTML blocks", () => {
+  assert.deepEqual(markdownTargets([
+    "> <div>",
+    "> # raw HTML",
+    "> [bad]: docs/not-visible.md",
+    ">",
+    "> [good]: docs/visible.md",
+  ].join("\n")), ["docs/visible.md"]);
+  assert.deepEqual(markdownTargets([
+    "- <table>",
+    "  [bad]: docs/not-visible.md",
+    "",
+    "  [good]: docs/visible.md",
+  ].join("\n")), ["docs/visible.md"]);
+});
+
 test("ignores fenced code nested in block containers", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",
