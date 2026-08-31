@@ -313,6 +313,26 @@ test("recognizes GFM table boundaries before definitions", () => {
     "docs/quoted-table.md",
     "docs/listed-table.md",
   ]);
+  assert.deepEqual(markdownTargets([
+    "A | B",
+    "| --- |",
+    "2. ~~~",
+    "   [active](docs/active.md)",
+    "   ~~~",
+  ].join("\n")), ["docs/active.md"]);
+  assert.deepEqual(markdownTargets([
+    "Earlier paragraph line",
+    "A | B",
+    "| --- | --- |",
+    "2. ~~~",
+    "   [multiline](docs/multiline.md)",
+    "   ~~~",
+  ].join("\n")), ["docs/multiline.md"]);
+  assert.deepEqual(markdownTargets([
+    "| A \\| B |",
+    "| --- |",
+    "[escaped]: docs/escaped-pipe.md",
+  ].join("\n")), ["docs/escaped-pipe.md"]);
 });
 
 test("keeps invalid backtick fence candidates in paragraphs", () => {

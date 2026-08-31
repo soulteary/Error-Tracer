@@ -394,7 +394,7 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
       (container.orderedStart === null ? "bullet" : "ordered")).join("/");
   let state = cache.get(key);
   if (!state || state.index > index) {
-    state = { index: 0, paragraphOpen: false };
+    state = { index: 0, paragraphOpen: false, paragraphStart: -1 };
     cache.set(key, state);
   }
   while (state.index < index) {
@@ -402,6 +402,7 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     state.index++;
     if (startsNewListItem(lines[previous], containers)) {
       state.paragraphOpen = false;
+      state.paragraphStart = -1;
     }
     const content = paragraphContentWithinContainers(
       lines[previous], containers,
@@ -409,9 +410,18 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     if (content === null) {
       state.paragraphOpen = state.paragraphOpen &&
         lazyParagraphContinuation(lines[previous], containers);
+      if (!state.paragraphOpen) {
+        state.paragraphStart = -1;
+      }
       continue;
     }
-    const nextParagraphOpen = paragraphOpenAfter(content, state.paragraphOpen);
+    const wasOpen = state.paragraphOpen;
+    const tableHeader = wasOpen && state.paragraphStart === previous - 1
+      ? paragraphContentWithinContainers(lines[previous - 1], containers)
+      : null;
+    const nextParagraphOpen = paragraphOpenAfter(
+      content, wasOpen, tableHeader,
+    );
     if (!state.paragraphOpen || !nextParagraphOpen) {
       const nestedLine = parseBlockContainers(content);
       const definition = referenceDefinitionAt(
@@ -426,16 +436,20 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
       );
       if (definition) {
         state.paragraphOpen = false;
+        state.paragraphStart = -1;
         state.index += definition.consumed;
         continue;
       }
     }
     state.paragraphOpen = nextParagraphOpen;
+    state.paragraphStart = nextParagraphOpen
+      ? (wasOpen ? state.paragraphStart : previous)
+      : -1;
   }
   return !startsNewListItem(lines[index], containers) && state.paragraphOpen;
 }
 
-function paragraphOpenAfter(line, paragraphOpen) {
+function paragraphOpenAfter(line, paragraphOpen, tableHeader = null) {
   const value = line.replace(/\r$/, "");
   if (!value.trim()) {
     return false;
@@ -450,7 +464,7 @@ function paragraphOpenAfter(line, paragraphOpen) {
     }
     return paragraphOpen && list.orderedStart !== null && list.orderedStart !== 1;
   }
-  if (gfmTableDelimiter(value)) {
+  if (gfmTableDelimiter(value, tableHeader)) {
     return false;
   }
   if (/^(?: {4}|\t)/.test(value)) {
@@ -468,14 +482,54 @@ function paragraphOpenAfter(line, paragraphOpen) {
   return true;
 }
 
-function gfmTableDelimiter(line) {
-  const row = line.match(/^ {0,3}(.*)$/)?.[1]?.trim();
-  if (!row?.includes("|")) {
+function gfmTableDelimiter(line, header) {
+  const delimiter = gfmTableCells(line);
+  const headerRow = gfmTableCells(header);
+  if (!delimiter?.hasPipe || !headerRow ||
+      delimiter.cells.length !== headerRow.cells.length) {
     return false;
   }
-  const cells = row.replace(/^\|/, "").replace(/\|$/, "").split("|");
-  return cells.length > 0 &&
-    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+  return delimiter.cells.every(
+    (cell) => /^:?-{3,}:?$/.test(cell.trim()),
+  );
+}
+
+function gfmTableCells(line) {
+  if (typeof line !== "string") {
+    return null;
+  }
+  const row = line.match(/^ {0,3}(.*)$/)?.[1]?.trim();
+  if (!row) {
+    return null;
+  }
+  const cells = [""];
+  let backslashes = 0;
+  let hasPipe = false;
+  let endedWithPipe = false;
+  for (const character of row) {
+    if (character === "\\") {
+      cells[cells.length - 1] += character;
+      backslashes++;
+      endedWithPipe = false;
+      continue;
+    }
+    if (character === "|" && backslashes % 2 === 0) {
+      cells.push("");
+      hasPipe = true;
+      endedWithPipe = true;
+    } else {
+      cells[cells.length - 1] += character;
+      endedWithPipe = false;
+    }
+    backslashes = 0;
+  }
+  if (row.startsWith("|")) {
+    cells.shift();
+  }
+  if (endedWithPipe) {
+    cells.pop();
+  }
+  return { cells, hasPipe };
 }
 
 function continueBlockContainers(line, containers) {
