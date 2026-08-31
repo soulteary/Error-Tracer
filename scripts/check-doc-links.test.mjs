@@ -422,11 +422,14 @@ test("extracts references with multiline titles", () => {
     "  on following lines'",
     "10. [ordered]: docs/ordered-title.md \"A list",
     "    title\"",
+    "[indented]: docs/indented.md \"An indented",
+    "    title continuation\"",
   ].join("\n")), [
     "docs/quoted.md",
     "docs/parenthesized.md",
     "docs/next-line.md",
     "docs/ordered-title.md",
+    "docs/indented.md",
   ]);
 });
 

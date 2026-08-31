@@ -186,7 +186,9 @@ function completeReferenceTitle(initial, lines, nextIndex, containers) {
     if (!unterminatedReferenceTitle(value)) {
       return { valid: false, consumed: 0 };
     }
-    const continuation = referenceContinuation(lines, nextIndex + consumed, containers);
+    const continuation = referenceTitleContinuation(
+      lines, nextIndex + consumed, containers,
+    );
     if (continuation === null || !continuation.trim()) {
       return { valid: false, consumed: 0 };
     }
@@ -216,6 +218,14 @@ function referenceContinuation(lines, index, containers) {
   }
   const continuation = continueBlockContainers(lines[index], containers);
   return continuation?.match(/^[ \t]{0,3}(\S.*)$/)?.[1] || null;
+}
+
+function referenceTitleContinuation(lines, index, containers) {
+  if (index >= lines.length) {
+    return null;
+  }
+  const continuation = continueBlockContainers(lines[index], containers);
+  return continuation?.match(/^[ \t]*(\S.*)$/)?.[1] || null;
 }
 
 function parseBlockContainers(line, orderedListCanInterrupt = null) {
@@ -594,9 +604,13 @@ function withoutFencedCode(contents) {
   let fence = null;
   let htmlBlock = null;
   let activeContainers = [];
+  let referenceContinuationThrough = -1;
   const output = [];
   const paragraphCache = new Map();
-  for (const line of contents.split("\n")) {
+  const definitionParagraphCache = new Map();
+  const lines = contents.split("\n");
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (fence) {
       const content = continueBlockContainers(line, fence.containers);
       if (content !== null) {
@@ -630,6 +644,11 @@ function withoutFencedCode(contents) {
       htmlBlock = null;
     }
 
+    if (index <= referenceContinuationThrough) {
+      output.push(line);
+      continue;
+    }
+
     const orderedListCanInterrupt = (containers) =>
       !paragraphOpenBefore(
         output, output.length, containers, paragraphCache,
@@ -645,6 +664,12 @@ function withoutFencedCode(contents) {
       )
       : parseBlockContainers(line, orderedListCanInterrupt);
     activeContainers = parsed.containers;
+    const definition = referenceDefinitionAt(
+      lines, index, true, definitionParagraphCache, parsed,
+    );
+    if (definition?.consumed) {
+      referenceContinuationThrough = index + definition.consumed;
+    }
     if (stripIndent(parsed.content, 4) !== null &&
         (startsNewListItem(line, parsed.containers) ||
          !paragraphOpenBefore(
