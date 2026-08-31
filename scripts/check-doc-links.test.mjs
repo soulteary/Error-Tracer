@@ -234,12 +234,30 @@ test("ends an unclosed quote fence before a new quote block", () => {
   ].join("\n")), ["docs/new-quote.md"]);
 });
 
-test("ignores GitHub footnote definitions", () => {
+test("ignores GitHub footnotes while preserving block boundaries", () => {
   assert.deepEqual(markdownTargets([
     "A statement with a footnote.[^1]",
     "",
     "[^1]: This is explanatory prose, not a link destination.",
   ].join("\n")), []);
+  assert.deepEqual(markdownTargets([
+    "[^1]: explanation",
+    "[after-footnote]: docs/after-footnote.md",
+    "Paragraph",
+    "[^2]: interrupts the paragraph",
+    "[after-interruption]: docs/after-interruption.md",
+    "> [^quoted]: quoted explanation",
+    "> [quoted-after]: docs/quoted-after.md",
+  ].join("\n")), [
+    "docs/after-footnote.md",
+    "docs/after-interruption.md",
+    "docs/quoted-after.md",
+  ]);
+  assert.deepEqual(markdownTargets([
+    "[^multiline]:",
+    "    indented continuation",
+    "[after-multiline]: docs/after-multiline.md",
+  ].join("\n")), ["docs/after-multiline.md"]);
 });
 
 test("ignores prose that resembles a reference definition", () => {

@@ -507,6 +507,9 @@ function paragraphOpenAfter(line, paragraphOpen, tableHeader = null) {
       /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
+  if (/^ {0,3}\[\^(?:\\.|[^\]\\\n])+\]:/.test(value)) {
+    return false;
+  }
   if (/^ {0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(value)) {
     return paragraphOpen;
   }
