@@ -17,6 +17,18 @@ const blankTerminatedHTMLTags = new Set([
   "search", "section", "summary", "table", "tbody", "td", "tfoot", "th",
   "thead", "title", "tr", "track", "ul",
 ]);
+const htmlWhitespace = "[\\t\\n\\v\\f\\r ]";
+const htmlTagName = "[A-Za-z][A-Za-z0-9-]*";
+const htmlAttributeName = "[A-Za-z_:][A-Za-z0-9_.:-]*";
+const htmlAttributeValue =
+  "(?:[^\\t\\n\\v\\f\\r \"'=<>`]+|'[^']*'|\"[^\"]*\")";
+const htmlAttribute = `${htmlWhitespace}+${htmlAttributeName}` +
+  `(?:${htmlWhitespace}*=${htmlWhitespace}*${htmlAttributeValue})?`;
+const typeSevenHTMLTag = new RegExp(
+  `^ {0,3}(?:<${htmlTagName}(?:${htmlAttribute})*` +
+  `${htmlWhitespace}*/?>|</${htmlTagName}${htmlWhitespace}*>` +
+  `)${htmlWhitespace}*$`,
+);
 
 export function checkMarkdownLinks(root, markdownFile, contents) {
   const failures = [];
@@ -511,7 +523,7 @@ function paragraphOpenAfter(line, paragraphOpen, tableHeader = null) {
   }
   if (/^ {0,3}(?:#{1,6}(?:[ \t]+|$)|>)/.test(value) ||
       fencedCodeOpening(value) ||
-      htmlBlockAt(value) ||
+      htmlBlockAt(value, !paragraphOpen) ||
       /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
@@ -838,7 +850,12 @@ function withoutFencedCode(contents) {
       appendMaskedLine(output, definitionLines, index, parsed.containers);
       continue;
     }
-    const openingHTML = htmlBlockAt(parsed.content);
+    const openingHTML = htmlBlockAt(
+      parsed.content,
+      !paragraphOpenBefore(
+        output, output.length, parsed.containers, paragraphCache,
+      ),
+    );
     if (openingHTML) {
       if (openingHTML.endsOnBlank ||
           !openingHTML.terminator.test(parsed.content)) {
@@ -900,7 +917,7 @@ function fencedCodeOpening(content) {
   return { character: opening[1][0], length: opening[1].length };
 }
 
-function htmlBlockAt(content) {
+function htmlBlockAt(content, allowTypeSeven = false) {
   const typeOne = content.match(/^ {0,3}<(script|pre|style|textarea)(?:[ \t]|>|$)/i);
   if (typeOne) {
     return { terminator: new RegExp(`</${typeOne[1]}[ \\t]*>`, "i") };
@@ -921,6 +938,9 @@ function htmlBlockAt(content) {
     /^ {0,3}<\/?([A-Za-z][A-Za-z0-9-]*)(?=[ \t]|\/?>|$)/,
   );
   if (blankTerminatedHTMLTags.has(blankTerminated?.[1]?.toLowerCase())) {
+    return { endsOnBlank: true };
+  }
+  if (allowTypeSeven && typeSevenHTMLTag.test(content)) {
     return { endsOnBlank: true };
   }
   return null;

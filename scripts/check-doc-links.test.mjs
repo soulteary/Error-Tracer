@@ -108,6 +108,28 @@ test("lets type-6 HTML blocks interrupt paragraphs", () => {
   ].join("\n")), ["docs/visible.md"]);
 });
 
+test("recognizes type-7 HTML blocks only outside paragraphs", () => {
+  assert.deepEqual(markdownTargets([
+    '<custom-tag data-state = "open" disabled>',
+    "# raw HTML",
+    "[hidden-open]: docs/not-open.md",
+    "",
+    "</custom-tag   >",
+    "[hidden-close]: docs/not-close.md",
+    "",
+    "[visible]: docs/visible.md",
+  ].join("\n")), ["docs/visible.md"]);
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "<span>",
+    "[active](docs/active.md)",
+  ].join("\n")), ["docs/active.md"]);
+  assert.deepEqual(markdownTargets([
+    '<span bad*="value">',
+    "[active](docs/active.md)",
+  ].join("\n")), ["docs/active.md"]);
+});
+
 test("ignores fenced code nested in block containers", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",
