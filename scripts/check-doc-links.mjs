@@ -442,6 +442,9 @@ function paragraphOpenAfter(line, paragraphOpen) {
   }
   const list = listMarkerPrefix(value);
   if (list) {
+    if (stripIndent(value.slice(list.length), 4) !== null) {
+      return paragraphOpen;
+    }
     if (list.empty && value.trim() !== "-") {
       return paragraphOpen;
     }

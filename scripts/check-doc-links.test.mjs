@@ -380,6 +380,20 @@ test("keeps noninterrupting list-like code in paragraphs visible", () => {
   ].join("\n")), ["docs/unordered.md", "docs/ordered.md"]);
 });
 
+test("keeps paragraphs open after noninterrupting list-like code", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "-     unordered code",
+    "[unordered]: docs/not-unordered.md",
+    "Paragraph",
+    "1.     ordered code",
+    "[ordered]: docs/not-ordered.md",
+    "> Paragraph",
+    "> -     quoted code",
+    "> [quoted]: docs/not-quoted.md",
+  ].join("\n")), []);
+});
+
 test("keeps indented list continuations visible", () => {
   assert.deepEqual(markdownTargets([
     "- List item",
