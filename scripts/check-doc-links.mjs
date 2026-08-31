@@ -73,7 +73,9 @@ export function markdownTargets(contents) {
         listCanInterrupt,
       )
       : parseBlockContainers(lines[index], listCanInterrupt);
-    activeContainers = parsedLine.containers;
+    activeContainers = footnoteDefinitionOpening(parsedLine.content)
+      ? [...parsedLine.containers, { type: "footnote", indent: 4 }]
+      : parsedLine.containers;
     const definition = referenceDefinitionAt(
       lines, index, true, paragraphCache, parsedLine,
     );
@@ -297,9 +299,13 @@ function parseContinuedBlockContainers(
 ) {
   const continued = blockContainerPrefix(line, activeContainers);
   const startsSiblingListItem = startsNewListItem(line, activeContainers);
+  const leftFootnote = activeContainers.slice(continued.count).some(
+    (container) => container.type === "footnote",
+  );
   let containers = activeContainers.slice(0, continued.count);
   let content = continued.content;
-  if (continued.count < activeContainers.length && activeParagraphOpen &&
+  if (continued.count < activeContainers.length && !leftFootnote &&
+      activeParagraphOpen &&
       paragraphOpenAfter(content, true)) {
     containers = activeContainers;
   } else if (continued.count < activeContainers.length && !content.trim()) {
@@ -330,15 +336,15 @@ function listMarkerPrefix(value) {
 
   let index = marker[0].length;
   const markerColumn = indentationWidth(value.slice(0, index));
-  const empty = !value.slice(index).trim();
-  if (index === value.length) {
+  const empty = /^[ \t]*$/.test(value.slice(index));
+  if (empty) {
     return {
-      length: index,
+      length: value.length,
       indent: markerColumn + 1,
       marker: markerText,
       markerIndent: marker[1].length,
       orderedStart: marker[2] === undefined ? null : Number(marker[2]),
-      empty: true,
+      empty,
     };
   }
   if (value[index] !== " " && value[index] !== "\t") {
@@ -390,8 +396,10 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
   const cache = paragraphCache || new Map();
   const key = containers.map((container) => container.type === "quote"
     ? "quote"
-    : `list:${container.markerIndent}:${container.indent}:` +
-      (container.orderedStart === null ? "bullet" : "ordered")).join("/");
+    : container.type === "footnote"
+      ? "footnote"
+      : `list:${container.markerIndent}:${container.indent}:` +
+        (container.orderedStart === null ? "bullet" : "ordered")).join("/");
   let state = cache.get(key);
   if (!state || state.index > index) {
     state = {
@@ -507,13 +515,17 @@ function paragraphOpenAfter(line, paragraphOpen, tableHeader = null) {
       /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:_[ \t]*){3,}|(?:-[ \t]*)+|=+[ \t]*)$/.test(value)) {
     return false;
   }
-  if (/^ {0,3}\[\^(?:\\.|[^\]\\\n])+\]:/.test(value)) {
+  if (footnoteDefinitionOpening(value)) {
     return false;
   }
   if (/^ {0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(value)) {
     return paragraphOpen;
   }
   return true;
+}
+
+function footnoteDefinitionOpening(line) {
+  return /^ {0,3}\[\^(?:\\.|[^\]\\\n])+\]:/.test(line);
 }
 
 function gfmTableDelimiter(line, header) {
@@ -582,6 +594,14 @@ function paragraphContentWithinContainers(line, containers) {
       remaining = quoteContent;
       continue;
     }
+    if (container.type === "footnote") {
+      const stripped = stripIndent(remaining, container.indent);
+      if (stripped === null) {
+        return null;
+      }
+      remaining = stripped;
+      continue;
+    }
     const marker = listMarkerPrefix(remaining);
     if (marker?.markerIndent === container.markerIndent) {
       remaining = expandTabs(remaining.slice(marker.length), marker.indent);
@@ -630,6 +650,14 @@ function startsNewListItem(line, containers) {
         return false;
       }
       remaining = quoteContent;
+      continue;
+    }
+    if (container.type === "footnote") {
+      const stripped = stripIndent(remaining, container.indent);
+      if (stripped === null) {
+        return false;
+      }
+      remaining = stripped;
       continue;
     }
     const marker = listMarkerPrefix(remaining);
@@ -793,7 +821,9 @@ function withoutFencedCode(contents) {
         orderedListCanInterrupt,
       )
       : parseBlockContainers(line, orderedListCanInterrupt);
-    activeContainers = parsed.containers;
+    activeContainers = footnoteDefinitionOpening(parsed.content)
+      ? [...parsed.containers, { type: "footnote", indent: 4 }]
+      : parsed.containers;
     const definition = referenceDefinitionAt(
       definitionLines, index, true, definitionParagraphCache, parsed,
     );
@@ -847,6 +877,10 @@ function maskedContainerLine(containers) {
   for (const container of containers) {
     if (container.type === "quote") {
       line += "> ";
+      continue;
+    }
+    if (container.type === "footnote") {
+      line += " ".repeat(container.indent);
       continue;
     }
     const padding = container.indent - container.markerIndent -

@@ -255,9 +255,20 @@ test("ignores GitHub footnotes while preserving block boundaries", () => {
   ]);
   assert.deepEqual(markdownTargets([
     "[^multiline]:",
-    "    indented continuation",
+    "    [active](docs/footnote-active.md)",
+    "    ",
+    "        [code](docs/not-footnote-code.md)",
+    "    ```markdown",
+    "    [fenced](docs/not-footnote-fence.md)",
+    "    ```",
     "[after-multiline]: docs/after-multiline.md",
-  ].join("\n")), ["docs/after-multiline.md"]);
+    "> [^quoted-multiline]:",
+    ">     [quoted-active](docs/quoted-footnote.md)",
+  ].join("\n")), [
+    "docs/footnote-active.md",
+    "docs/quoted-footnote.md",
+    "docs/after-multiline.md",
+  ]);
 });
 
 test("ignores prose that resembles a reference definition", () => {
@@ -559,6 +570,10 @@ test("recognizes empty list items without breaking Setext headings", () => {
     "+",
     "    [continuation](docs/continuation.md)",
   ].join("\n")), ["docs/continuation.md"]);
+  assert.deepEqual(markdownTargets([
+    "1.   ",
+    "    [spaced-marker](docs/spaced-marker.md)",
+  ].join("\n")), ["docs/spaced-marker.md"]);
 });
 
 test("resets paragraph state between sibling list items", () => {
