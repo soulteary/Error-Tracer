@@ -343,6 +343,39 @@ test("recognizes GFM table boundaries before definitions", () => {
     "| --- |",
     "[escaped]: docs/escaped-pipe.md",
   ].join("\n")), ["docs/escaped-pipe.md"]);
+  assert.deepEqual(markdownTargets([
+    "| A |",
+    "| --- |",
+    "| body |",
+    "[after-body]: docs/after-body.md",
+    "| B |",
+    "| --- |",
+    "body without a pipe",
+    "[after-plain-body]: docs/after-plain-body.md",
+  ].join("\n")), [
+    "docs/after-body.md",
+    "docs/after-plain-body.md",
+  ]);
+  assert.deepEqual(markdownTargets([
+    "| A |",
+    "| --- |",
+    "[status]: Not yet available",
+    "another body row",
+    "[after-apparent-definition]: docs/after-apparent-definition.md",
+  ].join("\n")), ["docs/after-apparent-definition.md"]);
+  assert.deepEqual(markdownTargets([
+    "> | A |",
+    "> | --- |",
+    "> | body |",
+    "> [quoted-body]: docs/quoted-body.md",
+    "- | A |",
+    "  | --- |",
+    "  body without a pipe",
+    "  [listed-body]: docs/listed-body.md",
+  ].join("\n")), [
+    "docs/quoted-body.md",
+    "docs/listed-body.md",
+  ]);
 });
 
 test("keeps invalid backtick fence candidates in paragraphs", () => {

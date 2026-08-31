@@ -394,7 +394,12 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
       (container.orderedStart === null ? "bullet" : "ordered")).join("/");
   let state = cache.get(key);
   if (!state || state.index > index) {
-    state = { index: 0, paragraphOpen: false, paragraphStart: -1 };
+    state = {
+      index: 0,
+      paragraphOpen: false,
+      paragraphStart: -1,
+      tableOpen: false,
+    };
     cache.set(key, state);
   }
   while (state.index < index) {
@@ -403,11 +408,13 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     if (startsNewListItem(lines[previous], containers)) {
       state.paragraphOpen = false;
       state.paragraphStart = -1;
+      state.tableOpen = false;
     }
     const content = paragraphContentWithinContainers(
       lines[previous], containers,
     );
     if (content === null) {
+      state.tableOpen = false;
       state.paragraphOpen = state.paragraphOpen &&
         lazyParagraphContinuation(lines[previous], containers);
       if (!state.paragraphOpen) {
@@ -415,10 +422,33 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
       }
       continue;
     }
+    if (state.tableOpen) {
+      const nestedLine = parseBlockContainers(content);
+      const definition = referenceDefinitionAt(
+        lines,
+        previous,
+        false,
+        null,
+        {
+          content: nestedLine.content,
+          containers: [...containers, ...nestedLine.containers],
+        },
+      );
+      const apparentDefinition = nestedLine.containers.length === 0 &&
+        /^[ \t]{0,3}\[(?!\^)(?:\\.|[^\]\\\n])+\]:/.test(content);
+      if (paragraphOpenAfter(content, false) ||
+          (apparentDefinition && !definition)) {
+        state.paragraphOpen = false;
+        state.paragraphStart = -1;
+        continue;
+      }
+      state.tableOpen = false;
+    }
     const wasOpen = state.paragraphOpen;
     const tableHeader = wasOpen && state.paragraphStart === previous - 1
       ? paragraphContentWithinContainers(lines[previous - 1], containers)
       : null;
+    const startsTable = gfmTableDelimiter(content, tableHeader);
     const nextParagraphOpen = paragraphOpenAfter(
       content, wasOpen, tableHeader,
     );
@@ -445,6 +475,7 @@ function paragraphOpenBefore(lines, index, containers, paragraphCache) {
     state.paragraphStart = nextParagraphOpen
       ? (wasOpen ? state.paragraphStart : previous)
       : -1;
+    state.tableOpen = startsTable;
   }
   return !startsNewListItem(lines[index], containers) && state.paragraphOpen;
 }
