@@ -233,6 +233,20 @@ test("keeps invalid backtick fence candidates in paragraphs", () => {
   ].join("\n")), ["docs/after-blank.md"]);
 });
 
+test("measures fence indentation in visual columns", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "\t```",
+    "[visible](docs/visible.md)",
+  ].join("\n")), ["docs/visible.md"]);
+  assert.deepEqual(markdownTargets([
+    "```",
+    "\t```",
+    "[hidden](docs/not-visible.md)",
+    "```",
+  ].join("\n")), []);
+});
+
 test("preserves lazy block-quote paragraph continuations", () => {
   assert.deepEqual(markdownTargets([
     "> Quoted paragraph",

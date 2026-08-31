@@ -614,7 +614,7 @@ function withoutFencedCode(contents) {
     if (fence) {
       const content = continueBlockContainers(line, fence.containers);
       if (content !== null) {
-        const closing = content.match(/^[ \t]{0,3}(`+|~+)[ \t]*$/)?.[1] || "";
+        const closing = content.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1] || "";
         if (closing[0] === fence.character && closing.length >= fence.length) {
           fence = null;
         }
@@ -705,7 +705,7 @@ function withoutFencedCode(contents) {
 }
 
 function fencedCodeOpening(content) {
-  const opening = content.match(/^[ \t]{0,3}(`{3,}|~{3,})(.*)$/);
+  const opening = content.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
   if (!opening || (opening[1][0] === "`" && opening[2].includes("`"))) {
     return null;
   }
