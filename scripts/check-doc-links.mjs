@@ -450,6 +450,9 @@ function paragraphOpenAfter(line, paragraphOpen) {
     }
     return paragraphOpen && list.orderedStart !== null && list.orderedStart !== 1;
   }
+  if (gfmTableDelimiter(value)) {
+    return false;
+  }
   if (/^(?: {4}|\t)/.test(value)) {
     return paragraphOpen;
   }
@@ -463,6 +466,16 @@ function paragraphOpenAfter(line, paragraphOpen) {
     return paragraphOpen;
   }
   return true;
+}
+
+function gfmTableDelimiter(line) {
+  const row = line.match(/^ {0,3}(.*)$/)?.[1]?.trim();
+  if (!row?.includes("|")) {
+    return false;
+  }
+  const cells = row.replace(/^\|/, "").replace(/\|$/, "").split("|");
+  return cells.length > 0 &&
+    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
 function continueBlockContainers(line, containers) {

@@ -297,6 +297,24 @@ test("does not let reference definitions interrupt paragraphs", () => {
   ]);
 });
 
+test("recognizes GFM table boundaries before definitions", () => {
+  assert.deepEqual(markdownTargets([
+    "| A | B |",
+    "| :--- | ---: |",
+    "[table]: docs/table.md",
+    "> | A |",
+    "> | --- |",
+    "> [quoted]: docs/quoted-table.md",
+    "- | A |",
+    "  | --- |",
+    "  [listed]: docs/listed-table.md",
+  ].join("\n")), [
+    "docs/table.md",
+    "docs/quoted-table.md",
+    "docs/listed-table.md",
+  ]);
+});
+
 test("keeps invalid backtick fence candidates in paragraphs", () => {
   assert.deepEqual(markdownTargets([
     "Paragraph",
