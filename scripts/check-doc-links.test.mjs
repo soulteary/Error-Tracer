@@ -59,6 +59,27 @@ test("preserves multiline reference titles after HTML blocks", () => {
     "[missing]: docs/missing.md \"long",
     "    title\"",
   ].join("\n")), ["docs/missing.md"]);
+  assert.deepEqual(markdownTargets([
+    "<script>",
+    "raw script",
+    "</script>",
+    "[script]: docs/script.md \"long",
+    "    title\"",
+    "<!--",
+    "raw comment",
+    "-->",
+    "[comment]: docs/comment.md \"long",
+    "    title\"",
+    "<?processing",
+    "raw instruction",
+    "?>",
+    "[instruction]: docs/instruction.md \"long",
+    "    title\"",
+  ].join("\n")), [
+    "docs/script.md",
+    "docs/comment.md",
+    "docs/instruction.md",
+  ]);
 });
 
 test("ignores blank-terminated type-6 HTML blocks", () => {

@@ -628,6 +628,7 @@ function withoutFencedCode(contents) {
   const paragraphCache = new Map();
   const definitionParagraphCache = new Map();
   const lines = contents.split("\n");
+  const definitionLines = lines.slice();
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (fence) {
@@ -638,11 +639,13 @@ function withoutFencedCode(contents) {
         if (closing[0] === fence.character && closing.length >= fence.length) {
           fence = null;
         }
-        output.push(maskedContainerLine(containers));
+        appendMaskedLine(output, definitionLines, index, containers);
         continue;
       }
       if (blankWithinBlockContainers(line, fence.containers)) {
-        output.push(maskedContainerLine(fence.containers));
+        appendMaskedLine(
+          output, definitionLines, index, fence.containers,
+        );
         continue;
       }
       fence = null;
@@ -656,7 +659,7 @@ function withoutFencedCode(contents) {
             htmlBlock.terminator?.test(content)) {
           htmlBlock = null;
         }
-        output.push(maskedContainerLine(containers));
+        appendMaskedLine(output, definitionLines, index, containers);
         continue;
       }
       if (blankWithinBlockContainers(line, htmlBlock.containers)) {
@@ -664,7 +667,7 @@ function withoutFencedCode(contents) {
         if (htmlBlock.endsOnBlank) {
           htmlBlock = null;
         }
-        output.push(maskedContainerLine(containers));
+        appendMaskedLine(output, definitionLines, index, containers);
         continue;
       }
       htmlBlock = null;
@@ -691,7 +694,7 @@ function withoutFencedCode(contents) {
       : parseBlockContainers(line, orderedListCanInterrupt);
     activeContainers = parsed.containers;
     const definition = referenceDefinitionAt(
-      lines, index, true, definitionParagraphCache, parsed,
+      definitionLines, index, true, definitionParagraphCache, parsed,
     );
     if (definition?.consumed) {
       referenceContinuationThrough = index + definition.consumed;
@@ -701,7 +704,7 @@ function withoutFencedCode(contents) {
          !paragraphOpenBefore(
            output, output.length, parsed.containers, paragraphCache,
          ))) {
-      output.push(maskedContainerLine(parsed.containers));
+      appendMaskedLine(output, definitionLines, index, parsed.containers);
       continue;
     }
     const openingHTML = htmlBlockAt(parsed.content);
@@ -714,7 +717,7 @@ function withoutFencedCode(contents) {
           containers: parsed.containers,
         };
       }
-      output.push(maskedContainerLine(parsed.containers));
+      appendMaskedLine(output, definitionLines, index, parsed.containers);
       continue;
     }
     const opening = fencedCodeOpening(parsed.content);
@@ -724,12 +727,18 @@ function withoutFencedCode(contents) {
         length: opening.length,
         containers: parsed.containers,
       };
-      output.push(maskedContainerLine(parsed.containers));
+      appendMaskedLine(output, definitionLines, index, parsed.containers);
       continue;
     }
     output.push(line);
   }
   return output.join("\n");
+}
+
+function appendMaskedLine(output, definitionLines, index, containers) {
+  const masked = maskedContainerLine(containers);
+  definitionLines[index] = masked;
+  output.push(masked);
 }
 
 function maskedContainerLine(containers) {
