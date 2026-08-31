@@ -98,6 +98,16 @@ test("ignores blank-terminated type-6 HTML blocks", () => {
   ].join("\n")), ["docs/visible.md"]);
 });
 
+test("lets type-6 HTML blocks interrupt paragraphs", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "<div>",
+    "[hidden](docs/not-visible.md)",
+    "",
+    "[visible]: docs/visible.md",
+  ].join("\n")), ["docs/visible.md"]);
+});
+
 test("ignores fenced code nested in block containers", () => {
   assert.deepEqual(markdownTargets([
     "> ```markdown",
