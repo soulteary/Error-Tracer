@@ -102,6 +102,25 @@ test("keeps a list fence open across an unindented blank line", () => {
   ].join("\n")), []);
 });
 
+test("preserves list context after masking block content", () => {
+  assert.deepEqual(markdownTargets([
+    "10. ```",
+    "    code",
+    "    ```",
+    "    [missing]: docs/missing.md",
+  ].join("\n")), ["docs/missing.md"]);
+  assert.deepEqual(markdownTargets([
+    "> 10. <script>",
+    ">     const example = true;",
+    ">     </script>",
+    ">     [nested]: docs/nested.md",
+  ].join("\n")), ["docs/nested.md"]);
+  assert.deepEqual(markdownTargets([
+    "10.     indented code",
+    "    [after-code]: docs/after-code.md",
+  ].join("\n")), ["docs/after-code.md"]);
+});
+
 test("does not mask fences from ordered markers inside paragraphs", () => {
   assert.deepEqual(markdownTargets([
     "Paragraph",

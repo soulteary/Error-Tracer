@@ -250,6 +250,7 @@ function parseBlockContainers(line, orderedListCanInterrupt = null) {
       containers.push({
         type: "list",
         indent: list.indent,
+        marker: list.marker,
         markerIndent: list.markerIndent,
         orderedStart: list.orderedStart,
       });
@@ -315,6 +316,7 @@ function listMarkerPrefix(value) {
   if (!marker) {
     return null;
   }
+  const markerText = marker[0].slice(marker[1].length);
 
   let index = marker[0].length;
   const markerColumn = indentationWidth(value.slice(0, index));
@@ -323,6 +325,7 @@ function listMarkerPrefix(value) {
     return {
       length: index,
       indent: markerColumn + 1,
+      marker: markerText,
       markerIndent: marker[1].length,
       orderedStart: marker[2] === undefined ? null : Number(marker[2]),
       empty: true,
@@ -342,6 +345,7 @@ function listMarkerPrefix(value) {
       return {
         length: firstPaddingEnd,
         indent: firstPaddingColumn,
+        marker: markerText,
         markerIndent: marker[1].length,
         orderedStart: marker[2] === undefined ? null : Number(marker[2]),
         empty,
@@ -352,6 +356,7 @@ function listMarkerPrefix(value) {
   return {
     length: index,
     indent: column,
+    marker: markerText,
     markerIndent: marker[1].length,
     orderedStart: marker[2] === undefined ? null : Number(marker[2]),
     empty,
@@ -614,15 +619,16 @@ function withoutFencedCode(contents) {
     if (fence) {
       const content = continueBlockContainers(line, fence.containers);
       if (content !== null) {
+        const containers = fence.containers;
         const closing = content.match(/^ {0,3}(`+|~+)[ \t]*$/)?.[1] || "";
         if (closing[0] === fence.character && closing.length >= fence.length) {
           fence = null;
         }
-        output.push("");
+        output.push(maskedContainerLine(containers));
         continue;
       }
       if (blankWithinBlockContainers(line, fence.containers)) {
-        output.push("");
+        output.push(maskedContainerLine(fence.containers));
         continue;
       }
       fence = null;
@@ -631,14 +637,15 @@ function withoutFencedCode(contents) {
     if (htmlBlock) {
       const content = continueBlockContainers(line, htmlBlock.containers);
       if (content !== null) {
+        const containers = htmlBlock.containers;
         if (htmlBlock.terminator.test(content)) {
           htmlBlock = null;
         }
-        output.push("");
+        output.push(maskedContainerLine(containers));
         continue;
       }
       if (blankWithinBlockContainers(line, htmlBlock.containers)) {
-        output.push("");
+        output.push(maskedContainerLine(htmlBlock.containers));
         continue;
       }
       htmlBlock = null;
@@ -675,7 +682,7 @@ function withoutFencedCode(contents) {
          !paragraphOpenBefore(
            output, output.length, parsed.containers, paragraphCache,
          ))) {
-      output.push("");
+      output.push(maskedContainerLine(parsed.containers));
       continue;
     }
     const openingHTML = htmlBlockAt(parsed.content);
@@ -686,7 +693,7 @@ function withoutFencedCode(contents) {
           containers: parsed.containers,
         };
       }
-      output.push("");
+      output.push(maskedContainerLine(parsed.containers));
       continue;
     }
     const opening = fencedCodeOpening(parsed.content);
@@ -696,12 +703,27 @@ function withoutFencedCode(contents) {
         length: opening.length,
         containers: parsed.containers,
       };
-      output.push("");
+      output.push(maskedContainerLine(parsed.containers));
       continue;
     }
     output.push(line);
   }
   return output.join("\n");
+}
+
+function maskedContainerLine(containers) {
+  let line = "";
+  for (const container of containers) {
+    if (container.type === "quote") {
+      line += "> ";
+      continue;
+    }
+    const padding = container.indent - container.markerIndent -
+      container.marker.length;
+    line += `${" ".repeat(container.markerIndent)}${container.marker}` +
+      " ".repeat(Math.max(1, padding));
+  }
+  return line;
 }
 
 function fencedCodeOpening(content) {
