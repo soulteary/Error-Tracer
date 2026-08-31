@@ -723,7 +723,8 @@ function maskedContainerLine(containers) {
     line += `${" ".repeat(container.markerIndent)}${container.marker}` +
       " ".repeat(Math.max(1, padding));
   }
-  return line;
+  // Keep list markers nonempty so an interrupting `1.` block stays interrupting.
+  return line ? `${line}#` : "";
 }
 
 function fencedCodeOpening(content) {

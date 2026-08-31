@@ -121,6 +121,16 @@ test("preserves list context after masking block content", () => {
   ].join("\n")), ["docs/after-code.md"]);
 });
 
+test("preserves paragraph interruption after masking list blocks", () => {
+  assert.deepEqual(markdownTargets([
+    "Paragraph",
+    "1. ```",
+    "   code",
+    "   ```",
+    "[after]: docs/missing.md",
+  ].join("\n")), ["docs/missing.md"]);
+});
+
 test("does not mask fences from ordered markers inside paragraphs", () => {
   assert.deepEqual(markdownTargets([
     "Paragraph",
