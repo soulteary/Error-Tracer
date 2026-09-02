@@ -21,6 +21,8 @@ Notable changes to Error-Tracer are documented here. The project follows
 
 ### Changed
 
+- Replaced the repository-local release Bash script with the SHA-pinned
+  `ci-recipes` Go CLI shared by CI and the documented local release process.
 - SQLite schema changes use ordered, transactional migrations.
 - A resolved issue returns to `open` when the same failure recurs; ignored
   issues remain ignored.

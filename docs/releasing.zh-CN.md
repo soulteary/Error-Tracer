@@ -15,7 +15,8 @@
 4. 在 Linux 上将完全相同的归档构建到一个新路径：
 
    ```sh
-   scripts/build-release.sh 2.0.0 /tmp/error-tracer-release
+   go install github.com/soulteary/ci-recipes/cmd/ci-recipes@6e790adf553ecff9f5ba5a3d0beeb9a9256a29ee
+   ci-recipes error-tracer build-release 2.0.0 /tmp/error-tracer-release
    ```
 
 5. 创建标签前，使用 Linux 归档实际运行 `version` 和 `demo`。
