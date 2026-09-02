@@ -12,6 +12,9 @@ concurrency:
   group: "release-${{ github.ref }}"
   cancel-in-progress: false
 
+env:
+  CI_RECIPES_VERSION: 6e790adf553ecff9f5ba5a3d0beeb9a9256a29ee
+
 jobs:
   release:
     name: Build, attest, and publish
@@ -36,6 +39,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Install CI recipes
+        env:
+          GOBIN: ${{ runner.temp }}/ci-recipes-bin
+        run: |
+          go install "github.com/soulteary/ci-recipes/cmd/ci-recipes@${CI_RECIPES_VERSION}"
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -88,7 +98,7 @@ jobs:
           bun run check:docs
 
       - name: Build reproducible release archives
-        run: scripts/build-release.sh "${VERSION}" dist
+        run: ci-recipes error-tracer build-release "${VERSION}" dist
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
