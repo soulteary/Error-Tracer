@@ -4,7 +4,7 @@ ARG VERSION=2.0.0-dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-FROM --platform=$BUILDPLATFORM golang:1.27.0-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS build
 
 ARG VERSION
 ARG COMMIT
