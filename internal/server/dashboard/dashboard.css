@@ -8,7 +8,10 @@
   --line-strong: rgba(148, 163, 184, 0.28);
   --text: #f8fafc;
   --muted: #94a3b8;
-  --subtle: #64748b;
+  /* 5.35:1 on the panel surface and 5.71:1 on the page background. Every use
+     is 10-12px, so WCAG AA wants 4.5:1 with no large-text relief; #64748b
+     reached only 3.90:1. */
+  --subtle: #7b8ba3;
   --accent: #7c6cff;
   --accent-bright: #a89cff;
   --cyan: #22d3ee;
@@ -308,7 +311,7 @@ p {
 }
 
 .token-row input::placeholder {
-  color: #475569;
+  color: var(--subtle);
 }
 
 .token-row input:focus {
