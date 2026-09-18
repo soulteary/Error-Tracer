@@ -26,10 +26,14 @@ func main() {
 
 func run() int {
 	if len(os.Args) >= 2 {
+		// A subcommand never falls through to the serve path: `break` would
+		// leave the switch rather than run(), so a typo such as
+		// `error-tracer version --json` would open the production database
+		// read-write and bind the listener.
 		switch os.Args[1] {
 		case "healthcheck":
 			if len(os.Args) != 2 {
-				break
+				return usage("error-tracer healthcheck")
 			}
 			address := os.Getenv("ERROR_TRACER_ADDRESS")
 			if err := healthcheck.Check(context.Background(), address); err != nil {
@@ -39,14 +43,14 @@ func run() int {
 			return 0
 		case "demo":
 			if len(os.Args) != 2 {
-				break
+				return usage("error-tracer demo")
 			}
 			return runDemo()
 		case "db":
 			return runDatabaseCommand(os.Args[2:])
 		case "version":
 			if len(os.Args) != 2 {
-				break
+				return usage("error-tracer version")
 			}
 			fmt.Println(buildinfo.Summary())
 			return 0
@@ -94,6 +98,13 @@ func run() int {
 	}, false)
 }
 
+// usage reports an invalid subcommand invocation and returns the exit code
+// shared with `error-tracer db`.
+func usage(invocation string) int {
+	slog.Error("usage: " + invocation)
+	return 2
+}
+
 func runDatabaseCommand(arguments []string) int {
 	operation := ""
 	destination := ""
@@ -104,8 +115,7 @@ func runDatabaseCommand(arguments []string) int {
 		operation = "backup"
 		destination = arguments[1]
 	default:
-		slog.Error("usage: error-tracer db check | error-tracer db backup <destination>")
-		return 2
+		return usage("error-tracer db check | error-tracer db backup <destination>")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

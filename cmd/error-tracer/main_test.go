@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -184,5 +186,49 @@ func TestDemoURLUsesABrowserReachableHost(t *testing.T) {
 		if got := demoURL(test.address); got != test.want {
 			t.Errorf("demoURL(%q) = %q, want %q", test.address, got, test.want)
 		}
+	}
+}
+
+func TestRunRejectsMalformedSubcommands(t *testing.T) {
+	// A guard that used `break` left the switch rather than run(), so these
+	// invocations fell through to the serve path and opened the configured
+	// database read-write instead of reporting a usage error.
+	database := filepath.Join(t.TempDir(), "error-tracer.db")
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", database)
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdef0123456789")
+	t.Setenv("ERROR_TRACER_ADDRESS", "127.0.0.1:0")
+
+	for _, arguments := range [][]string{
+		{"version", "--json"},
+		{"healthcheck", "-v"},
+		{"demo", "extra"},
+		{"db"},
+		{"db", "check", "extra"},
+		{"db", "backup"},
+		{"db", "backup", "  "},
+	} {
+		t.Run(strings.Join(arguments, " "), func(t *testing.T) {
+			restore := os.Args
+			os.Args = append([]string{"error-tracer"}, arguments...)
+			t.Cleanup(func() { os.Args = restore })
+
+			if code := run(); code != 2 {
+				t.Fatalf("run(%q) = %d, want 2", arguments, code)
+			}
+			if _, err := os.Stat(database); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("stat(%q) error = %v, want the database to stay untouched", database, err)
+			}
+		})
+	}
+}
+
+func TestRunReportsVersion(t *testing.T) {
+	restore := os.Args
+	os.Args = []string{"error-tracer", "version"}
+	t.Cleanup(func() { os.Args = restore })
+
+	if code := run(); code != 0 {
+		t.Fatalf("run(version) = %d, want 0", code)
 	}
 }
