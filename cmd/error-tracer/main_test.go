@@ -56,6 +56,12 @@ type fakeIssuePruner struct {
 	remaining int64
 	calls     int
 	err       error
+
+	limit        int
+	overLimit    int64
+	limitCalls   int
+	limitProject string
+	limitErr     error
 }
 
 func (p *fakeIssuePruner) PruneIssues(_ context.Context, projectID string, cutoff time.Time) (int64, error) {
@@ -65,6 +71,17 @@ func (p *fakeIssuePruner) PruneIssues(_ context.Context, projectID string, cutof
 	deleted := min(p.remaining, int64(store.PruneBatchSize))
 	p.remaining -= deleted
 	return deleted, p.err
+}
+
+func (p *fakeIssuePruner) EnforceIssueLimit(
+	_ context.Context, projectID string, limit int,
+) (int64, error) {
+	p.limitProject = projectID
+	p.limit = limit
+	p.limitCalls++
+	evicted := min(p.overLimit, int64(store.PruneBatchSize))
+	p.overLimit -= evicted
+	return evicted, p.limitErr
 }
 
 func (s *fakeHTTPServer) Shutdown(context.Context) error {
@@ -240,6 +257,12 @@ type blockingPruner struct {
 	once    sync.Once
 }
 
+func (p *blockingPruner) EnforceIssueLimit(
+	context.Context, string, int,
+) (int64, error) {
+	return 0, nil
+}
+
 func (p *blockingPruner) PruneIssues(
 	ctx context.Context, _ string, _ time.Time,
 ) (int64, error) {
@@ -260,7 +283,7 @@ func TestStartRetentionDoesNotBlockStartup(t *testing.T) {
 	}
 	returned := make(chan func(), 1)
 	go func() {
-		returned <- startRetention(context.Background(), pruner, "project-a", 30)
+		returned <- startRetention(context.Background(), pruner, "project-a", 30, 0)
 	}()
 
 	var stop func()
@@ -278,4 +301,80 @@ func TestStartRetentionDoesNotBlockStartup(t *testing.T) {
 
 	close(pruner.release)
 	stop()
+}
+
+func TestEnforceIssueLimitRepeatsBoundedEvictions(t *testing.T) {
+	pruner := &fakeIssuePruner{overLimit: int64(store.PruneBatchSize*2 + 3)}
+
+	evicted, err := enforceIssueLimit(context.Background(), pruner, "project-a", 1000)
+	if err != nil {
+		t.Fatalf("enforceIssueLimit() error = %v", err)
+	}
+	if evicted != int64(store.PruneBatchSize*2+3) || pruner.limitCalls != 3 {
+		t.Fatalf("evicted = %d in %d calls, want %d in 3 calls",
+			evicted, pruner.limitCalls, store.PruneBatchSize*2+3)
+	}
+	if pruner.limitProject != "project-a" || pruner.limit != 1000 {
+		t.Fatalf("project = %q, limit = %d, want project-a and 1000",
+			pruner.limitProject, pruner.limit)
+	}
+}
+
+func TestStartRetentionRunsBothBounds(t *testing.T) {
+	// Age and cardinality bound different things, so configuring either one
+	// has to start the sweeper.
+	tests := []struct {
+		name      string
+		days      int
+		maxIssues int
+		wantAge   bool
+		wantLimit bool
+	}{
+		{name: "both", days: 30, maxIssues: 1000, wantAge: true, wantLimit: true},
+		{name: "age only", days: 30, wantAge: true},
+		{name: "limit only", maxIssues: 1000, wantLimit: true},
+		{name: "neither"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pruner := &fakeIssuePruner{}
+			stop := startRetention(
+				context.Background(), pruner, "project-a", test.days, test.maxIssues,
+			)
+			stop()
+
+			if gotAge := pruner.calls > 0; gotAge != test.wantAge {
+				t.Fatalf("age sweep ran = %v, want %v", gotAge, test.wantAge)
+			}
+			if gotLimit := pruner.limitCalls > 0; gotLimit != test.wantLimit {
+				t.Fatalf("limit sweep ran = %v, want %v", gotLimit, test.wantLimit)
+			}
+		})
+	}
+}
+
+func TestRunReportsDatabaseFailures(t *testing.T) {
+	// signal.NotifyContext's stop func cancels the context, so checking the
+	// context after calling it reported every genuine startup failure as an
+	// interruption and exited 0 — a supervisor could not tell a corrupt
+	// database from a clean shutdown.
+	directory := t.TempDir()
+	corrupt := filepath.Join(directory, "corrupt.db")
+	if err := os.WriteFile(corrupt, []byte(strings.Repeat("not a database", 64)), 0o600); err != nil {
+		t.Fatalf("write corrupt database: %v", err)
+	}
+
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", corrupt)
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdef0123456789")
+	t.Setenv("ERROR_TRACER_ADDRESS", "127.0.0.1:0")
+
+	restore := os.Args
+	os.Args = []string{"error-tracer"}
+	t.Cleanup(func() { os.Args = restore })
+
+	if code := run(); code != 1 {
+		t.Fatalf("run() = %d, want 1 for an unusable database", code)
+	}
 }

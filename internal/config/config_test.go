@@ -54,8 +54,52 @@ func TestFromEnvironmentUsesDefaults(t *testing.T) {
 	if cfg.DemoMode {
 		t.Fatal("DemoMode = true, want false")
 	}
+	if cfg.RetentionDays != defaultRetentionDays {
+		t.Fatalf("RetentionDays = %d, want %d", cfg.RetentionDays, defaultRetentionDays)
+	}
+	if cfg.MaxIssues != 0 {
+		t.Fatalf("MaxIssues = %d, want 0", cfg.MaxIssues)
+	}
+	if cfg.SDKCrossOrigin {
+		t.Fatal("SDKCrossOrigin = true, want false")
+	}
+}
+
+func TestFromEnvironmentReadsRetentionAndIssueLimit(t *testing.T) {
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+	t.Setenv("ERROR_TRACER_RETENTION_DAYS", "0")
+	t.Setenv("ERROR_TRACER_MAX_ISSUES", "25000")
+	t.Setenv("ERROR_TRACER_SDK_CORS_ENABLED", "true")
+
+	cfg, err := FromEnvironment()
+	if err != nil {
+		t.Fatalf("FromEnvironment() error = %v", err)
+	}
+	// Zero stays meaningful: it is how an operator opts out of age-based
+	// cleanup now that the default is non-zero.
 	if cfg.RetentionDays != 0 {
 		t.Fatalf("RetentionDays = %d, want 0", cfg.RetentionDays)
+	}
+	if cfg.MaxIssues != 25000 {
+		t.Fatalf("MaxIssues = %d, want 25000", cfg.MaxIssues)
+	}
+	if !cfg.SDKCrossOrigin {
+		t.Fatal("SDKCrossOrigin = false, want true")
+	}
+}
+
+func TestFromEnvironmentRejectsOutOfRangeIssueLimit(t *testing.T) {
+	for _, value := range []string{"-1", "10000001", "many"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+			t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdefghijklmn")
+			t.Setenv("ERROR_TRACER_MAX_ISSUES", value)
+
+			if _, err := FromEnvironment(); err == nil {
+				t.Fatalf("FromEnvironment() error = nil for %q", value)
+			}
+		})
 	}
 }
 

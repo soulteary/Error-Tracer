@@ -62,15 +62,32 @@ func run() int {
 		slog.Error("invalid configuration", "error", err)
 		return 1
 	}
+	// Opening runs the migrations and the event-history reconcile, either of
+	// which can take a while on a large database. A background context made
+	// the process ignore SIGTERM until they finished, so a rolling update had
+	// to wait out the whole startup before the container would stop.
+	startupCtx, stopStartup := signal.NotifyContext(
+		context.Background(), os.Interrupt, syscall.SIGTERM,
+	)
 	issueStore, err := store.OpenSQLiteWithOptions(
-		context.Background(),
+		startupCtx,
 		cfg.DatabasePath,
 		store.SQLiteOptions{
 			MaxOpenConnections: cfg.SQLiteMaxOpenConnections,
 			MaxEventsPerIssue:  cfg.MaxEventsPerIssue,
 		},
 	)
+	// Read the context before stopping it: signal.NotifyContext's stop func
+	// cancels the context too, so checking afterwards would report every
+	// genuine failure — a corrupt database, an unwritable path, a failed
+	// migration — as an interruption and exit 0.
+	interrupted := startupCtx.Err() != nil
+	stopStartup()
 	if err != nil {
+		if interrupted {
+			slog.Info("startup interrupted before the database was ready")
+			return 0
+		}
 		slog.Error("open issue database", "error", err)
 		return 1
 	}
@@ -91,10 +108,13 @@ func run() int {
 		RateBurst:          cfg.RateBurst,
 		DemoMode:           cfg.DemoMode,
 		MetricsEnabled:     cfg.MetricsEnabled,
+		SDKCrossOrigin:     cfg.SDKCrossOrigin,
 	})
 
 	return serve(app, cfg.Address, cfg.ShutdownTimeout, func(ctx context.Context) func() {
-		return startRetention(ctx, issueStore, cfg.ProjectID, cfg.RetentionDays)
+		return startRetention(
+			ctx, issueStore, cfg.ProjectID, cfg.RetentionDays, cfg.MaxIssues,
+		)
 	}, false)
 }
 
@@ -227,19 +247,47 @@ func serve(
 	return 0
 }
 
-const retentionSweepInterval = 24 * time.Hour
+const (
+	retentionSweepInterval = 24 * time.Hour
+	// The cardinality cap runs far more often than the age sweep. Age is a
+	// slow-moving property, but issue count is driven by what reporters send,
+	// so a daily cap would let a full day of ingestion past the limit before
+	// it took effect. The sweep is cheap when the project is under the limit:
+	// the OFFSET skips every row and the DELETE matches nothing.
+	issueLimitSweepInterval = 5 * time.Minute
+)
 
 type issuePruner interface {
 	PruneIssues(context.Context, string, time.Time) (int64, error)
+	EnforceIssueLimit(context.Context, string, int) (int64, error)
 }
 
-func startRetention(parent context.Context, pruner issuePruner, projectID string, days int) func() {
-	if days <= 0 {
+// startRetention runs age-based cleanup and, when maxIssues is positive, a
+// cardinality cap. The two bound different things: a fingerprint includes the
+// client-supplied message, so an issue count is driven by what reporters send
+// rather than by how long data is kept, and age alone cannot bound it.
+func startRetention(
+	parent context.Context, pruner issuePruner, projectID string, days, maxIssues int,
+) func() {
+	if days <= 0 && maxIssues <= 0 {
+		slog.Warn(
+			"issue storage is unbounded: set ERROR_TRACER_RETENTION_DAYS, " +
+				"ERROR_TRACER_MAX_ISSUES, or both",
+		)
 		return func() {}
+	}
+	if days <= 0 {
+		slog.Warn(
+			"age-based cleanup is disabled; only the issue cap bounds storage",
+			"max_issues", maxIssues,
+		)
 	}
 
 	ctx, cancel := context.WithCancel(parent)
-	sweep := func() {
+	sweepAge := func() {
+		if days <= 0 {
+			return
+		}
 		deleted, err := pruneExpiredIssues(ctx, pruner, projectID, days, time.Now().UTC())
 		if err != nil {
 			if !errors.Is(err, context.Canceled) {
@@ -251,6 +299,22 @@ func startRetention(parent context.Context, pruner issuePruner, projectID string
 			slog.Info("pruned expired issues", "deleted", deleted, "retention_days", days)
 		}
 	}
+	sweepLimit := func() {
+		if maxIssues <= 0 {
+			return
+		}
+		evicted, err := enforceIssueLimit(ctx, pruner, projectID, maxIssues)
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				slog.Error("enforce issue limit", "error", err)
+			}
+			return
+		}
+		if evicted > 0 {
+			slog.Info("evicted issues over the limit", "evicted", evicted, "max_issues", maxIssues)
+		}
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -258,15 +322,32 @@ func startRetention(parent context.Context, pruner issuePruner, projectID string
 		// transaction per PruneBatchSize rows against SQLite's single writer,
 		// so running it before ListenAndServe delayed the listener in
 		// proportion to the backlog.
-		sweep()
-		ticker := time.NewTicker(retentionSweepInterval)
-		defer ticker.Stop()
+		sweepAge()
+		sweepLimit()
+
+		// A nil channel blocks forever in select, so a disabled bound simply
+		// never fires.
+		var ageTicks, limitTicks <-chan time.Time
+		if days > 0 {
+			ageTicker := time.NewTicker(retentionSweepInterval)
+			defer ageTicker.Stop()
+			ageTicks = ageTicker.C
+		}
+		if maxIssues > 0 {
+			limitTicker := time.NewTicker(issueLimitSweepInterval)
+			defer limitTicker.Stop()
+			limitTicks = limitTicker.C
+		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				sweep()
+			case <-ageTicks:
+				sweepAge()
+				// Age pruning frees headroom, so re-check the cap with it.
+				sweepLimit()
+			case <-limitTicks:
+				sweepLimit()
 			}
 		}
 	}()
@@ -274,6 +355,24 @@ func startRetention(parent context.Context, pruner issuePruner, projectID string
 	return func() {
 		cancel()
 		<-done
+	}
+}
+
+// enforceIssueLimit evicts oldest-first until the project is at or below
+// limit, in the same bounded batches the age sweep uses.
+func enforceIssueLimit(
+	ctx context.Context, pruner issuePruner, projectID string, limit int,
+) (int64, error) {
+	var total int64
+	for {
+		evicted, err := pruner.EnforceIssueLimit(ctx, projectID, limit)
+		total += evicted
+		if err != nil {
+			return total, err
+		}
+		if evicted < store.PruneBatchSize {
+			return total, nil
+		}
 	}
 }
 
