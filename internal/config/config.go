@@ -182,6 +182,27 @@ func nonNegativeInteger(name string, fallback, maximum int) (int, error) {
 	return value, nil
 }
 
+// isMatchableHostname reports whether hostname can ever equal the host of a
+// browser Origin header. Browsers send an exact, already-punycoded host, so a
+// wildcard, an empty host, or a non-ASCII label is accepted by url.Parse but
+// silently disables every origin it was meant to allow.
+func isMatchableHostname(hostname string) bool {
+	if hostname == "" {
+		return false
+	}
+	for index := 0; index < len(hostname); index++ {
+		character := hostname[index]
+		switch {
+		case character >= 'a' && character <= 'z':
+		case character >= '0' && character <= '9':
+		case character == '-' || character == '.' || character == ':' || character == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func parseOrigins(value string) ([]string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -204,7 +225,21 @@ func parseOrigins(value string) ([]string, error) {
 			return nil, fmt.Errorf("ERROR_TRACER_ALLOWED_ORIGINS value %q must not contain credentials, a path, query, or fragment", raw)
 		}
 		hostname := strings.ToLower(parsed.Hostname())
+		if !isMatchableHostname(hostname) {
+			return nil, fmt.Errorf(
+				"ERROR_TRACER_ALLOWED_ORIGINS origin %q must name an exact host; "+
+					"wildcards and non-ASCII host names never match a browser Origin header", raw,
+			)
+		}
 		port := parsed.Port()
+		if port != "" {
+			number, err := strconv.Atoi(port)
+			if err != nil || number < 1 || number > 65535 {
+				return nil, fmt.Errorf(
+					"ERROR_TRACER_ALLOWED_ORIGINS origin %q has an invalid port", raw,
+				)
+			}
+		}
 		if (scheme == "http" && port == "80") || (scheme == "https" && port == "443") {
 			port = ""
 		}
