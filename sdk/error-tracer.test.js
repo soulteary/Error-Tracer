@@ -1317,6 +1317,10 @@ test("destroy stops capture but still flushes what is queued", async () => {
 });
 
 test("a throwing runtime timer does not escape into the page", async () => {
+  // Scheduling cannot silently strand the event either: capture() has already
+  // resolved true, and with no timer nothing else would drain a partial batch
+  // on a quiet page.
+  const sent = [];
   const tracer = ErrorTracer.init({
     projectKey: PROJECT_KEY,
     autoCapture: false,
@@ -1331,9 +1335,48 @@ test("a throwing runtime timer does not escape into the page", async () => {
         throw new Error("timers are patched");
       },
     },
-    transport: () => true,
+    transport(body) {
+      sent.push(body);
+      return true;
+    },
   });
 
   assert.equal(await tracer.captureMessage("boom"), true);
+  assert.equal(sent.length, 1, "a partial batch must be delivered, not stranded");
+  assert.equal(tracer.getStats().queued, 0);
   tracer.destroy();
+});
+
+test("install is refused after a hard stop", () => {
+  // Reattaching after destroy() would report success while every resulting
+  // handler is refused by capture(), leaving inert listeners registered.
+  const registered = [];
+  const runtime = {
+    addEventListener(type) {
+      registered.push(type);
+    },
+    removeEventListener(type) {
+      const index = registered.indexOf(type);
+      if (index >= 0) {
+        registered.splice(index, 1);
+      }
+    },
+    setTimeout: (fn, ms) => setTimeout(fn, ms),
+    clearTimeout: (id) => clearTimeout(id),
+  };
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    runtime,
+    clock: () => FIXED_TIME,
+    transport: () => true,
+  });
+
+  assert.equal(tracer.install(), true);
+  assert.ok(registered.length > 0);
+
+  tracer.destroy();
+  assert.equal(registered.length, 0);
+  assert.equal(tracer.install(), false);
+  assert.equal(registered.length, 0);
 });

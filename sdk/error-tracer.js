@@ -132,7 +132,9 @@
     }
 
     install() {
-      if (this.installed || !this.runtime) {
+      // destroy() is permanent: capture() refuses everything afterwards, so
+      // reattaching would report success and leave inert listeners behind.
+      if (this.stopped || this.installed || !this.runtime) {
         return false;
       }
       if (typeof this.runtime.addEventListener !== "function" ||
@@ -601,7 +603,12 @@
           this.settle(this.flush());
         }, this.flushInterval);
       } catch (_) {
+        // No timer means nothing would ever drain the queue on a quiet page,
+        // and capture() has already resolved true. Deliver now instead of
+        // stranding the event. The flush empties the queue, so the
+        // scheduleFlush that runs when it settles returns at the guard above.
         this.flushTimer = null;
+        this.settle(this.flush());
         return;
       }
       if (this.flushTimer && typeof this.flushTimer.unref === "function") {
