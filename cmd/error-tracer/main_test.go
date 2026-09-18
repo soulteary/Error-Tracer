@@ -353,3 +353,28 @@ func TestStartRetentionRunsBothBounds(t *testing.T) {
 		})
 	}
 }
+
+func TestRunReportsDatabaseFailures(t *testing.T) {
+	// signal.NotifyContext's stop func cancels the context, so checking the
+	// context after calling it reported every genuine startup failure as an
+	// interruption and exited 0 — a supervisor could not tell a corrupt
+	// database from a clean shutdown.
+	directory := t.TempDir()
+	corrupt := filepath.Join(directory, "corrupt.db")
+	if err := os.WriteFile(corrupt, []byte(strings.Repeat("not a database", 64)), 0o600); err != nil {
+		t.Fatalf("write corrupt database: %v", err)
+	}
+
+	t.Setenv("ERROR_TRACER_DATABASE_PATH", corrupt)
+	t.Setenv("ERROR_TRACER_INGEST_KEY", "0123456789abcdef")
+	t.Setenv("ERROR_TRACER_ADMIN_TOKEN", "0123456789abcdef0123456789")
+	t.Setenv("ERROR_TRACER_ADDRESS", "127.0.0.1:0")
+
+	restore := os.Args
+	os.Args = []string{"error-tracer"}
+	t.Cleanup(func() { os.Args = restore })
+
+	if code := run(); code != 1 {
+		t.Fatalf("run() = %d, want 1 for an unusable database", code)
+	}
+}

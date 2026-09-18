@@ -1095,20 +1095,23 @@ func (s *SQLite) EnforceIssueLimit(
 		return 0, err
 	}
 
-	// The subquery keeps the newest `limit` rows and offers the rest oldest
-	// first, so the delete walks issues_project_last_seen in index order.
+	// Select from the OLDEST end of the excess, not from the newest end of it.
+	// Ordering newest-first and skipping `limit` rows takes the newest of the
+	// rows that must eventually go, so an interrupted or failed sweep would
+	// leave the oldest issues behind while newer ones were already deleted —
+	// the opposite of the advertised policy. The ordering here is the exact
+	// reverse of the keep-order, so the batch boundary stays consistent.
 	result, err := s.db.ExecContext(
 		ctx,
 		`DELETE FROM issues WHERE rowid IN (
-    SELECT rowid FROM (
-        SELECT rowid FROM issues
-        WHERE project_id = ?
-        ORDER BY last_seen DESC, fingerprint ASC
-        LIMIT ? OFFSET ?
-    )
+    SELECT rowid FROM issues
+    WHERE project_id = ?
+    ORDER BY last_seen ASC, fingerprint DESC
+    LIMIT MIN(?, MAX(0, (SELECT COUNT(*) FROM issues WHERE project_id = ?) - ?))
 )`,
 		projectID,
 		PruneBatchSize,
+		projectID,
 		limit,
 	)
 	if err != nil {

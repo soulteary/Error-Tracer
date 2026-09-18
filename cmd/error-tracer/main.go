@@ -77,9 +77,14 @@ func run() int {
 			MaxEventsPerIssue:  cfg.MaxEventsPerIssue,
 		},
 	)
+	// Read the context before stopping it: signal.NotifyContext's stop func
+	// cancels the context too, so checking afterwards would report every
+	// genuine failure — a corrupt database, an unwritable path, a failed
+	// migration — as an interruption and exit 0.
+	interrupted := startupCtx.Err() != nil
 	stopStartup()
 	if err != nil {
-		if startupCtx.Err() != nil {
+		if interrupted {
 			slog.Info("startup interrupted before the database was ready")
 			return 0
 		}

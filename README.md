@@ -101,15 +101,26 @@ read-only demo described in [Demo mode](docs/demo.md).
 
 ## Browser SDK
 
-The service exposes its embedded SDK at `/assets/error-tracer.js`. The response
-carries a content-derived `ETag`, so the same hash can pin the bundle with
-Subresource Integrity — that needs `crossorigin="anonymous"`, which in turn
-needs `ERROR_TRACER_SDK_CORS_ENABLED=true` on the collector:
+The service exposes its embedded SDK at `/assets/error-tracer.js`. It can be
+pinned with Subresource Integrity, which needs `crossorigin="anonymous"` and
+therefore `ERROR_TRACER_SDK_CORS_ENABLED=true` on the collector.
+
+The response's `ETag` is the SHA-256 of the body in hex; an `integrity`
+attribute wants the same digest in base64, so compute it rather than copying
+the `ETag`:
+
+```sh
+curl -fsS https://errors.example.com/assets/error-tracer.js |
+  openssl dgst -sha256 -binary | openssl base64 -A
+```
+
+Recompute it whenever the collector is upgraded, because the bundle ships with
+the binary:
 
 ```html
 <script
   src="https://errors.example.com/assets/error-tracer.js"
-  integrity="sha256-replace-with-the-served-etag"
+  integrity="sha256-replace-with-the-base64-digest"
   crossorigin="anonymous"
 ></script>
 <script>

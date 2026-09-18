@@ -1512,3 +1512,63 @@ func TestOpenSQLiteWithOptionsHonoursContextCancellation(t *testing.T) {
 		t.Fatalf("OpenSQLiteWithOptions() error = %v, want context.Canceled", err)
 	}
 }
+
+func TestSQLiteEnforceIssueLimitTakesTheOldestBatchFirst(t *testing.T) {
+	// With more excess than PruneBatchSize, a single call must delete the
+	// OLDEST batch. Ordering newest-first and skipping `limit` rows deletes
+	// the newest of the excess instead, so an interrupted sweep would leave
+	// the oldest issues behind — the opposite of the advertised policy. Both
+	// orderings converge to the same final state, so only a partial sweep
+	// distinguishes them.
+	const (
+		total = PruneBatchSize + 120
+		limit = 50
+	)
+	database := openTestSQLite(t, filepath.Join(t.TempDir(), "error-tracer.db"))
+	base := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+
+	for start := 0; start < total; start += 100 {
+		end := min(start+100, total)
+		batch := make([]event.Event, 0, end-start)
+		for index := start; index < end; index++ {
+			captured := event.Event{
+				Kind:       event.KindError,
+				Message:    fmt.Sprintf("failure-%05d", index),
+				ReceivedAt: base.Add(time.Duration(index) * time.Second),
+			}
+			captured.Normalize()
+			batch = append(batch, captured)
+		}
+		if _, err := database.RecordBatch(context.Background(), "project-a", batch); err != nil {
+			t.Fatalf("RecordBatch(%d) error = %v", start, err)
+		}
+	}
+
+	evicted, err := database.EnforceIssueLimit(context.Background(), "project-a", limit)
+	if err != nil {
+		t.Fatalf("EnforceIssueLimit() error = %v", err)
+	}
+	if evicted != PruneBatchSize {
+		t.Fatalf("evicted = %d, want %d", evicted, PruneBatchSize)
+	}
+
+	page, err := database.ListIssues(context.Background(), "project-a", ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if page.Total != total-PruneBatchSize {
+		t.Fatalf("remaining = %d, want %d", page.Total, total-PruneBatchSize)
+	}
+	// Survivors must be one contiguous newest block. The oldest one left is
+	// index PruneBatchSize; anything older means a newer issue was deleted
+	// ahead of it.
+	oldestKept := fmt.Sprintf("failure-%05d", PruneBatchSize)
+	for _, issue := range page.Issues {
+		if issue.LastEvent.Message < oldestKept {
+			t.Fatalf(
+				"issue %q survived while newer issues were evicted; oldest allowed is %q",
+				issue.LastEvent.Message, oldestKept,
+			)
+		}
+	}
+}

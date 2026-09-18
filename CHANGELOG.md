@@ -32,7 +32,9 @@ Notable changes to Error-Tracer are documented here. The project follows
   minutes so it reacts to ingestion rather than to the clock.
 - `ERROR_TRACER_SDK_CORS_ENABLED` serves the browser SDK with
   `Access-Control-Allow-Origin`, which a page needs before it can pin the
-  bundle with Subresource Integrity against the `ETag` already served.
+  bundle with Subresource Integrity. The documented example computes the
+  base64 digest an `integrity` attribute requires; the served `ETag` is the
+  same digest in hex and cannot be pasted in directly.
 - A startup warning when neither retention nor the issue cap is configured.
 - Database, application, and HTTP load tests with explicit safety limits.
 - Reproducible multi-platform release archives, checksums, SPDX SBOMs,

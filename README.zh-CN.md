@@ -89,15 +89,24 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 
 ## 浏览器 SDK
 
-服务在 `/assets/error-tracer.js` 提供内嵌 SDK。响应带有按内容计算的 `ETag`，
-因此可以用同一个哈希通过 Subresource Integrity 校验该文件——这需要
-`crossorigin="anonymous"`，而后者要求采集端设置
-`ERROR_TRACER_SDK_CORS_ENABLED=true`：
+服务在 `/assets/error-tracer.js` 提供内嵌 SDK。可以用 Subresource Integrity
+校验该文件——这需要 `crossorigin="anonymous"`，而后者要求采集端设置
+`ERROR_TRACER_SDK_CORS_ENABLED=true`。
+
+响应的 `ETag` 是响应体 SHA-256 的**十六进制**形式，而 `integrity` 属性需要同一
+摘要的 **base64** 形式，因此不要直接复制 `ETag`，应当自行计算：
+
+```sh
+curl -fsS https://errors.example.com/assets/error-tracer.js |
+  openssl dgst -sha256 -binary | openssl base64 -A
+```
+
+SDK 随二进制一同发布，因此每次升级采集端后都需要重新计算：
 
 ```html
 <script
   src="https://errors.example.com/assets/error-tracer.js"
-  integrity="sha256-替换为响应返回的-etag"
+  integrity="sha256-替换为上面算出的-base64-摘要"
   crossorigin="anonymous"
 ></script>
 <script>
