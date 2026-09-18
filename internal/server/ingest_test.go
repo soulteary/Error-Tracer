@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -391,6 +393,83 @@ func TestConstantTimeEqualSupportsVariableLengthCredentials(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := constantTimeEqual(test.left, test.right); got != test.want {
 				t.Fatalf("constantTimeEqual() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+type recordFailureStore struct {
+	store.Store
+	err error
+}
+
+func (s *recordFailureStore) Record(
+	context.Context, string, event.Event,
+) (store.Issue, error) {
+	return store.Issue{}, s.err
+}
+
+func (s *recordFailureStore) RecordBatch(
+	context.Context, string, []event.Event,
+) ([]store.Issue, error) {
+	return nil, s.err
+}
+
+func TestIngestLogsStoreFailures(t *testing.T) {
+	// The ingest path discarded every store error, so a full disk or a
+	// read-only database looked identical to a healthy service from the
+	// server side.
+	tests := []struct {
+		name string
+		path string
+		body string
+		want string
+	}{
+		{
+			name: "single event",
+			path: "/api/v1/events",
+			body: `{"project_key":"0123456789abcdef","event":{"kind":"error","message":"boom"}}`,
+			want: "record event",
+		},
+		{
+			name: "event batch",
+			path: "/api/v1/events/batch",
+			body: `{"project_key":"0123456789abcdef","events":[{"kind":"error","message":"boom"}]}`,
+			want: "record event batch",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			restore := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			t.Cleanup(func() { slog.SetDefault(restore) })
+
+			app := New(Options{
+				Store:     &recordFailureStore{Store: store.NewMemory(), err: errors.New("disk is full")},
+				ProjectID: "project-a",
+				IngestKey: "0123456789abcdef",
+			})
+			request := httptest.NewRequest(http.MethodPost, test.path, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			app.Handler().ServeHTTP(response, request)
+
+			if response.Code != http.StatusInternalServerError {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+			}
+			var failure errorResponse
+			if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+				t.Fatalf("decode response: %v", err)
+			}
+			if failure.Error != "internal_error" {
+				t.Fatalf("error = %q, want %q", failure.Error, "internal_error")
+			}
+			if !strings.Contains(logs.String(), test.want) ||
+				!strings.Contains(logs.String(), "disk is full") {
+				t.Fatalf("logs = %q, want %q and the underlying error", logs.String(), test.want)
 			}
 		})
 	}

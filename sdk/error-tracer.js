@@ -21,6 +21,14 @@
     tagValue: 256,
   });
   const KEEPALIVE_BODY_LIMIT = 60 * 1024;
+  // A single event that survives truncation can reach roughly 82 KiB before
+  // JSON escaping (a 64 KiB stack, a 4 KiB message, two URLs and 32 tags), so
+  // the default body ceiling has to sit above KEEPALIVE_BODY_LIMIT. Using the
+  // Beacon limit as the default made capture() drop exactly the deep-recursion
+  // traces LIMITS.stack was sized to keep. defaultTransport still chooses
+  // Beacon per body, so ordinary batches are unaffected, and the ceiling stays
+  // well under the collector's 1 MiB batch limit.
+  const DEFAULT_MAX_BATCH_BYTES = 256 * 1024;
   const EVENT_KINDS = new Set(["error", "unhandled_rejection", "resource_error"]);
   const parseJSON = JSON.parse;
 
@@ -74,7 +82,7 @@
         options.retryBaseDelay, 250, 1, 10_000, "retryBaseDelay",
       );
       this.maxBatchBytes = integerOption(
-        options.maxBatchBytes, KEEPALIVE_BODY_LIMIT, 1024, 900 * 1024, "maxBatchBytes",
+        options.maxBatchBytes, DEFAULT_MAX_BATCH_BYTES, 1024, 900 * 1024, "maxBatchBytes",
       );
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);
@@ -342,7 +350,9 @@
       return compactObject({
         kind,
         message,
-        stack: truncateUTF8(cleanString(safeRead(candidate, "stack")), LIMITS.stack),
+        stack: truncateUTF8(
+          scrubStackURLs(cleanString(safeRead(candidate, "stack")), this.runtime), LIMITS.stack,
+        ),
         source_url: sourceURL,
         page_url: pageURL,
         line: nonNegativeInteger(safeRead(candidate, "line")),
@@ -720,8 +730,42 @@
       parsed.hash = "";
       return parsed.toString();
     } catch (_) {
-      return value.split("#", 1)[0].split("?", 1)[0];
+      // The URL constructor is unavailable, so strip the same three parts by
+      // hand. Dropping only the query and the fragment would still ship
+      // basic-auth credentials to the collector.
+      const withoutQuery = value.split("#", 1)[0].split("?", 1)[0];
+      const separator = withoutQuery.indexOf("://");
+      if (separator < 0) {
+        return withoutQuery;
+      }
+      const scheme = withoutQuery.slice(0, separator + 3);
+      const authority = withoutQuery.slice(separator + 3);
+      const at = authority.lastIndexOf("@");
+      return at < 0 ? withoutQuery : scheme + authority.slice(at + 1);
     }
+  }
+
+  const STACK_URL_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s)'"]+/g;
+  const STACK_POSITION_PATTERN = /:\d+(?::\d+)?$/;
+
+  // scrubStackURLs applies scrubURL to every URL embedded in a stack trace.
+  // source_url and page_url were already scrubbed, but the same URLs appear in
+  // the stack, so credentials and query tokens reached the collector through
+  // it. A trailing ":line" or ":line:column" belongs to the frame, not to the
+  // URL, so it is split off and restored around the scrub.
+  function scrubStackURLs(stack, runtime) {
+    if (!stack || stack.indexOf("://") < 0) {
+      return stack;
+    }
+    return stack.replace(STACK_URL_PATTERN, (match) => {
+      let position = "";
+      const found = STACK_POSITION_PATTERN.exec(match);
+      if (found) {
+        position = found[0];
+        match = match.slice(0, match.length - position.length);
+      }
+      return scrubURL(match, runtime) + position;
+    });
   }
 
   function readLocation(runtime) {

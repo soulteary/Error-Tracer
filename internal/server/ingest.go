@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strings"
@@ -92,6 +93,7 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 			})
 			return
 		}
+		slog.Error("prepare event", "route", "/api/v1/events", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
@@ -101,6 +103,9 @@ func (s *Server) ingestEvent(w http.ResponseWriter, request *http.Request) {
 
 	issue, err := s.store.Record(request.Context(), s.projectID, captured)
 	if err != nil {
+		// Without this the store going read-only or the disk filling up is
+		// indistinguishable, from the server side, from a healthy service.
+		slog.Error("record event", "route", "/api/v1/events", "error", err)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}
@@ -168,6 +173,9 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 				})
 				return
 			}
+			slog.Error(
+				"prepare event", "route", "/api/v1/events/batch", "index", index, "error", err,
+			)
 			writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 			return
 		}
@@ -179,6 +187,10 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 
 	issues, err := s.store.RecordBatch(request.Context(), s.projectID, captured)
 	if err != nil || len(issues) != len(captured) {
+		slog.Error(
+			"record event batch", "route", "/api/v1/events/batch",
+			"events", len(captured), "issues", len(issues), "error", err,
+		)
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
 		return
 	}

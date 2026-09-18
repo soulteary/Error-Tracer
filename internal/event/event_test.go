@@ -344,3 +344,79 @@ func TestFingerprintIgnoresURLQueryAfterNormalization(t *testing.T) {
 		t.Fatal("cache-busting query changed the fingerprint")
 	}
 }
+
+func TestNormalizeScrubsStackFrameURLs(t *testing.T) {
+	tests := []struct {
+		name  string
+		stack string
+		want  string
+	}{
+		{
+			name:  "v8 frame with credentials and a query",
+			stack: "Error: boom\n    at run (https://user:pw@api.example.com/app.js?token=SECRET:10:2)",
+			want:  "Error: boom\n    at run (https://api.example.com/app.js:10:2)",
+		},
+		{
+			name:  "firefox frame with a fragment",
+			stack: "run@https://app.example.com/app.js#secret:10:2",
+			want:  "run@https://app.example.com/app.js:10:2",
+		},
+		{
+			name:  "bare frame without a position",
+			stack: "Error: boom\n    at https://user:pw@app.example.com/app.js",
+			want:  "Error: boom\n    at https://app.example.com/app.js",
+		},
+		{
+			name:  "host port is not mistaken for a frame position",
+			stack: "Error: boom\n    at run (https://app.example.com:8443/app.js:10:2)",
+			want:  "Error: boom\n    at run (https://app.example.com:8443/app.js:10:2)",
+		},
+		{
+			name:  "ordinary frame is untouched",
+			stack: "Error: boom\n    at run (https://app.example.com/app.js:10:2)",
+			want:  "Error: boom\n    at run (https://app.example.com/app.js:10:2)",
+		},
+		{
+			name:  "stack without a URL is untouched",
+			stack: "Error: boom\n    at run (<anonymous>)",
+			want:  "Error: boom\n    at run (<anonymous>)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			captured := Event{Kind: KindError, Message: "boom", Stack: test.stack}
+			captured.Normalize()
+			if captured.Stack != test.want {
+				t.Fatalf("Stack = %q, want %q", captured.Stack, test.want)
+			}
+			if strings.Contains(captured.Stack, "pw@") || strings.Contains(captured.Stack, "SECRET") {
+				t.Fatalf("Stack = %q, want no credentials or query data", captured.Stack)
+			}
+		})
+	}
+}
+
+func TestNormalizeKeepsFingerprintStableWhileScrubbingStacks(t *testing.T) {
+	// canonicalizeStackLocation already dropped the query from the hashed
+	// frame, so removing it from the stored stack must not regroup issues.
+	withQuery := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   "Error: boom\n    at run (https://app.example.com/app.js?v=2:10:2)",
+	}
+	plain := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   "Error: boom\n    at run (https://app.example.com/app.js:10:2)",
+	}
+	withQuery.Normalize()
+	plain.Normalize()
+
+	if withQuery.Fingerprint() != plain.Fingerprint() {
+		t.Fatalf(
+			"Fingerprint() = %q, want it to equal %q",
+			withQuery.Fingerprint(), plain.Fingerprint(),
+		)
+	}
+}

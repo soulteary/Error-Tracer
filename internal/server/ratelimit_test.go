@@ -403,3 +403,32 @@ func TestPreflightDoesNotConsumeIngestBudget(t *testing.T) {
 		t.Fatalf("submission status = %d, want %d", submissionResponse.Code, http.StatusAccepted)
 	}
 }
+
+func TestRejectedOriginConsumesRequestBudget(t *testing.T) {
+	// The origin check used to run before the request bucket was charged, so
+	// a disallowed origin could generate unlimited 403 responses.
+	app := New(Options{
+		Store:          store.NewMemory(),
+		ProjectID:      "project-a",
+		IngestKey:      "0123456789abcdef",
+		AllowedOrigins: []string{"https://app.example.com"},
+		RatePerMinute:  60,
+		RateBurst:      1,
+	})
+
+	submit := func() *httptest.ResponseRecorder {
+		request := eventRequest(http.MethodPost)
+		request.RemoteAddr = "192.0.2.20:1000"
+		request.Header.Set("Origin", "https://attacker.example")
+		response := httptest.NewRecorder()
+		app.Handler().ServeHTTP(response, request)
+		return response
+	}
+
+	if response := submit(); response.Code != http.StatusForbidden {
+		t.Fatalf("first status = %d, want %d", response.Code, http.StatusForbidden)
+	}
+	if response := submit(); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d", response.Code, http.StatusTooManyRequests)
+	}
+}

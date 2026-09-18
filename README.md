@@ -131,12 +131,15 @@ event already being delivered is excluded, but repeated timer or explicit
 flushes cannot create an unbounded chained backlog. `getStats().queued` reports
 both the ordinary queue and those reserved snapshots.
 
-`maxBatchBytes` defaults to 60 KiB so unload-time requests stay within the
-portable `sendBeacon`/fetch keepalive budget. A larger custom value is allowed,
-but payloads above that keepalive budget use a normal fetch and therefore need
-an explicit `await tracer.flush()` when delivery must be observed. An event
-that cannot fit in its own configured batch is dropped and counted in the
-client statistics instead of being sent as an oversized request.
+`maxBatchBytes` defaults to 256 KiB, above the largest single event the client
+truncation can produce, so a full-size stack trace is never dropped before it
+reaches the transport. The transport still chooses per payload: a body within
+the portable 60 KiB `sendBeacon`/fetch keepalive budget uses Beacon, and a
+larger one uses a normal fetch and therefore needs an explicit
+`await tracer.flush()` when delivery must be observed. Lower `maxBatchBytes`
+to keep every request inside the keepalive budget. An event that cannot fit in
+its own configured batch is dropped and counted in the client statistics
+instead of being sent as an oversized request.
 
 Call `await tracer.flush()` before a controlled shutdown when delivery should
 be observed, and use `tracer.getStats()` to inspect queued, sent, retried,
@@ -199,10 +202,12 @@ Rate limiting is charged per event, not per HTTP request. Set
 to submit. A batch whose event count exceeds the configured burst receives
 `422 rate_limit_burst_exceeded` without a `Retry-After` header because that request
 can never fit the bucket; split the batch or raise the configured burst.
-Each POST also consumes one token from a separate request bucket before parsing,
-using the same rate and burst settings, so malformed and unauthorized traffic
-remains bounded. After authentication and validation, all event tokens for a
-valid single or batch request are charged atomically.
+Each POST also consumes one token from a separate request bucket before the
+origin check and before parsing, using the same rate and burst settings, so
+malformed and unauthorized traffic remains bounded. `OPTIONS` preflights are
+deliberately exempt, because a browser must preflight before it can POST.
+After authentication and validation, all event tokens for a valid single or
+batch request are charged atomically.
 
 ```json
 {
@@ -319,6 +324,8 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
+`ERROR_TRACER_BIND` is a Compose-only host-interface setting and defaults to
+`127.0.0.1`; set it to `0.0.0.0` only when a TLS terminator fronts the service.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
 

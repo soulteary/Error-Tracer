@@ -116,11 +116,12 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 但重复的定时或显式 flush 无法形成无界的链式积压。`getStats().queued` 会同时统计
 普通队列和这些已保留快照。
 
-`maxBatchBytes` 默认为 60 KiB，以满足不同浏览器对 `sendBeacon`/fetch
-keepalive 请求体的通用限制。可以配置更大的值，但超过 keepalive 边界的载荷
-会改用普通 fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。
-单个事件若无法放入自身的批次，会直接丢弃并计入客户端统计，而不会发送超限
-请求。
+`maxBatchBytes` 默认为 256 KiB，高于客户端截断所能产生的最大单事件，因此完整
+的栈信息不会在到达传输层之前被丢弃。传输层仍按每个载荷选择：在 60 KiB 通用
+`sendBeacon`/fetch keepalive 边界之内的载荷使用 Beacon，超出的载荷改用普通
+fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。若希望所有请求
+都落在 keepalive 边界内，可以调低 `maxBatchBytes`。单个事件若无法放入自身的
+批次，会直接丢弃并计入客户端统计，而不会发送超限请求。
 
 在可控的页面关闭流程中，可调用 `await tracer.flush()` 并检查返回值；
 `tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。
@@ -172,8 +173,9 @@ UPSERT 在同一个事务中执行：
 超过突发量配置的批次会收到不带 `Retry-After` 的
 `422 rate_limit_burst_exceeded`，因为该请求不可能装入令牌桶；客户端应拆分批次，
 或提高突发量配置。
-每个 POST 在解析前还会从独立的请求令牌桶扣除一个令牌；该桶使用相同的速率和
-突发量配置，以限制格式错误和未授权流量。认证及校验完成后，单事件或批量请求的
+每个 POST 在来源校验和解析之前，还会从独立的请求令牌桶扣除一个令牌；该桶使用
+相同的速率和突发量配置，以限制格式错误和未授权流量。`OPTIONS` 预检请求不计费，
+因为浏览器必须先完成预检才能发起 POST。认证及校验完成后，单事件或批量请求的
 全部事件令牌会一次性原子扣除。
 
 ```json
@@ -271,7 +273,9 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
 | `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
 
-`ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。来源
+`ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。
+`ERROR_TRACER_BIND` 只用于 Compose 的宿主机监听地址，默认值为 `127.0.0.1`；
+只有在服务前面已经有 TLS 终端时，才应设置为 `0.0.0.0`。来源
 白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
 客户端仍可提交事件。
 

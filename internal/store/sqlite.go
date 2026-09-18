@@ -209,7 +209,11 @@ func OpenSQLiteReadOnly(ctx context.Context, path string) (*SQLite, error) {
 	if path == "" {
 		return nil, ErrDatabasePathRequired
 	}
-	database, err := sql.Open("sqlite", sqliteReadOnlyDataSourceName(path))
+	dataSourceName, err := sqliteReadOnlyDataSourceName(path)
+	if err != nil {
+		return nil, err
+	}
+	database, err := sql.Open("sqlite", dataSourceName)
 	if err != nil {
 		return nil, fmt.Errorf("open read-only sqlite database: %w", err)
 	}
@@ -219,7 +223,7 @@ func OpenSQLiteReadOnly(ctx context.Context, path string) (*SQLite, error) {
 		_ = database.Close()
 		return nil, fmt.Errorf("ping read-only sqlite database: %w", err)
 	}
-	return &SQLite{db: database}, nil
+	return &SQLite{db: database, maxEventsPerIssue: DefaultMaxEventsPerIssue}, nil
 }
 
 // OpenSQLiteWithOptions opens a SQLite database with an explicitly bounded
@@ -422,10 +426,20 @@ func sqliteDataSourceName(path string, connections int) string {
 	return path + separator + parameters
 }
 
-func sqliteReadOnlyDataSourceName(path string) string {
+// sqliteReadOnlyDataSourceName builds a read-only SQLite URI for path. A
+// filesystem path is resolved to an absolute path first: url.URL writes the
+// "//" authority marker whenever Path does not begin with a separator, so a
+// relative path such as "error-tracer.db" would otherwise become
+// "file://error-tracer.db" and SQLite would reject its first segment as a URI
+// authority.
+func sqliteReadOnlyDataSourceName(path string) (string, error) {
 	pathPart, rawQuery, hasQuery := strings.Cut(path, "?")
 	if !strings.HasPrefix(strings.ToLower(pathPart), "file:") {
-		pathPart = (&url.URL{Scheme: "file", Path: pathPart}).String()
+		absolutePath, err := filepath.Abs(pathPart)
+		if err != nil {
+			return "", fmt.Errorf("resolve database path %q: %w", pathPart, err)
+		}
+		pathPart = (&url.URL{Scheme: "file", Path: filepath.ToSlash(absolutePath)}).String()
 	}
 	query := make(url.Values)
 	if hasQuery {
@@ -436,7 +450,7 @@ func sqliteReadOnlyDataSourceName(path string) string {
 	query.Set("mode", "ro")
 	query.Set("_busy_timeout", "5000")
 	query.Set("_foreign_keys", "on")
-	return pathPart + "?" + query.Encode()
+	return pathPart + "?" + query.Encode(), nil
 }
 
 func isMemorySQLitePath(path string) bool {

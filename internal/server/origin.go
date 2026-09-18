@@ -20,10 +20,13 @@ func (s *Server) ingestBatchWithOrigin(w http.ResponseWriter, request *http.Requ
 }
 
 func (s *Server) allowIngestRequest(w http.ResponseWriter, request *http.Request) bool {
-	if !s.allowEventOrigin(w, request) {
+	// The request bucket is charged before the origin check so that
+	// origin-rejected traffic stays bounded too. Charging it afterwards let a
+	// client generate unlimited 403s from a disallowed origin.
+	if !allowRateLimit(w, request, s.requestLimiter, 1) {
 		return false
 	}
-	return allowRateLimit(w, request, s.requestLimiter, 1)
+	return s.allowEventOrigin(w, request)
 }
 
 func (s *Server) allowIngestTokens(
@@ -55,6 +58,9 @@ func allowRateLimit(
 	return true
 }
 
+// preflightEvent deliberately does not charge the request bucket: a browser
+// must preflight before it can POST, so charging both would make a small burst
+// unable to deliver anything. TestPreflightDoesNotConsumeIngestBudget pins it.
 func (s *Server) preflightEvent(w http.ResponseWriter, request *http.Request) {
 	if !s.allowEventOrigin(w, request) {
 		return

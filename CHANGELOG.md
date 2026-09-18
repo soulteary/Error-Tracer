@@ -28,6 +28,36 @@ Notable changes to Error-Tracer are documented here. The project follows
   issues remain ignored.
 - Production containers run as a non-root user with a read-only-compatible
   filesystem layout.
+- Stack traces are scrubbed of URL credentials, queries, and fragments on both
+  the collector and the browser SDK, matching `source_url` and `page_url`.
+  Issue fingerprints are unchanged.
+- The pre-parse request bucket is charged before the browser-origin check, so
+  origin-rejected traffic is bounded too. `OPTIONS` preflights stay exempt
+  because a browser must preflight before it can POST.
+- `ERROR_TRACER_ALLOWED_ORIGINS` rejects origins that can never match a browser
+  `Origin` header — wildcards, empty hosts, non-ASCII host names, and ports
+  outside 1-65535 — instead of accepting them and silently refusing every
+  browser request.
+- The browser SDK's `maxBatchBytes` defaults to 256 KiB rather than the 60 KiB
+  keepalive budget, so a full-size stack trace is no longer dropped before it
+  reaches the transport. The transport still selects Beacon or fetch per
+  payload.
+- Compose publishes the host port on `127.0.0.1` by default through the new
+  Compose-only `ERROR_TRACER_BIND` setting.
+
+### Fixed
+
+- `error-tracer db check` and `error-tracer db backup` failed with
+  `invalid uri authority` whenever the database path or the backup destination
+  was relative, which includes the default `ERROR_TRACER_DATABASE_PATH`.
+- A subcommand given extra arguments fell through to the serve path and opened
+  the configured database read-write instead of reporting a usage error.
+- Ingestion failures from the store are logged instead of being discarded
+  behind an opaque `500 internal_error`.
+- An unset `received_at` is omitted from JSON rather than serialized as
+  `0001-01-01T00:00:00Z`.
+- The dashboard declares the monospace custom property it referenced, so the
+  build-version chip renders in the intended typeface.
 
 ### Removed
 

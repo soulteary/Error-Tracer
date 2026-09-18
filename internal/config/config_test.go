@@ -284,6 +284,17 @@ func TestFromEnvironmentRejectsInvalidOrigins(t *testing.T) {
 		"https://app.example.com?query=1",
 		"https://app.example.com#fragment",
 		"https://app.example.com,",
+		// Accepted by url.Parse but unable to equal any browser Origin
+		// header, so the process used to start healthy and then reject
+		// every browser request forever.
+		"https://*.example.com",
+		"https://*",
+		"https://:8443",
+		"http://:80",
+		"https://app.example.com:99999",
+		"https://app.example.com:0",
+		"https://app.example.com:https",
+		"https://\u4f8b\u5b50.\u6d4b\u8bd5",
 	}
 
 	for _, value := range tests {

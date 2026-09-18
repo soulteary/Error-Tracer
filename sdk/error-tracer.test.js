@@ -1099,3 +1099,105 @@ function fakeEventTarget() {
 function eventLoopTurn() {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+test("delivers an event whose stack fills LIMITS.stack", async () => {
+  // The default maxBatchBytes used to be the 60 KiB Beacon limit while
+  // truncation kept stacks up to 64 KiB, so a deep-recursion trace was
+  // dropped by capture() without ever reaching the transport.
+  const bodies = [];
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    clock: () => FIXED_TIME,
+    transport(body) {
+      bodies.push(body);
+      return true;
+    },
+  });
+
+  const error = new Error("stack overflow");
+  error.stack = "RangeError: Maximum call stack size exceeded\n" +
+    "    at recurse (https://app.example.com/app.js:1:1)\n".repeat(1200);
+  assert.ok(error.stack.length > 60 * 1024);
+
+  assert.equal(await tracer.captureException(error), true);
+  await tracer.flush();
+
+  assert.equal(bodies.length, 1);
+  assert.equal(tracer.getStats().sent, 1);
+  assert.equal(tracer.getStats().dropped, 0);
+  const payload = JSON.parse(bodies[0]);
+  assert.equal(payload.events.length, 1);
+  assert.ok(payload.events[0].stack.length > 60 * 1024);
+});
+
+test("still drops a single event larger than a configured maxBatchBytes", async () => {
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    maxBatchBytes: 1024,
+    clock: () => FIXED_TIME,
+    transport() {
+      throw new Error("transport must not be called");
+    },
+  });
+
+  assert.equal(await tracer.captureMessage("x".repeat(4000)), false);
+  assert.equal(tracer.getStats().dropped, 1);
+});
+
+test("scrubs credentials and queries from stack frame URLs", async () => {
+  const bodies = [];
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    clock: () => FIXED_TIME,
+    transport(body) {
+      bodies.push(body);
+      return true;
+    },
+  });
+
+  const error = new Error("boom");
+  error.stack = "Error: boom\n" +
+    "    at run (https://user:pw@api.example.com/app.js?token=SECRET:10:2)\n" +
+    "    at call (https://app.example.com/vendor.js:5:1)";
+
+  assert.equal(await tracer.captureException(error), true);
+  await tracer.flush();
+
+  const stack = JSON.parse(bodies[0]).events[0].stack;
+  assert.ok(!stack.includes("pw@"), stack);
+  assert.ok(!stack.includes("SECRET"), stack);
+  assert.ok(stack.includes("https://api.example.com/app.js:10:2"), stack);
+  // An untouched frame keeps its position and its host port.
+  assert.ok(stack.includes("https://app.example.com/vendor.js:5:1"), stack);
+});
+
+test("strips credentials when the URL constructor is unavailable", async () => {
+  const bodies = [];
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    clock: () => FIXED_TIME,
+    // A runtime whose URL constructor throws drives scrubURL into its
+    // hand-rolled fallback, which used to strip only the query and fragment.
+    runtime: {
+      URL: function ThrowingURL() {
+        throw new Error("URL is unavailable");
+      },
+    },
+    transport(body) {
+      bodies.push(body);
+      return true;
+    },
+  });
+
+  assert.equal(await tracer.captureMessage("boom", {
+    sourceURL: "https://user:pw@app.example.com/app.js?token=SECRET",
+  }), true);
+  await tracer.flush();
+
+  const event = JSON.parse(bodies[0]).events[0];
+  assert.equal(event.source_url, "https://app.example.com/app.js");
+});
