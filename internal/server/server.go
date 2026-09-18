@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -57,9 +58,15 @@ func New(options Options) *Server {
 	for _, origin := range options.AllowedOrigins {
 		allowedOrigins[origin] = struct{}{}
 	}
-	adminTokens := []string{options.AdminToken}
-	if options.PreviousAdminToken != "" && options.PreviousAdminToken != options.AdminToken {
-		adminTokens = append(adminTokens, options.PreviousAdminToken)
+	// Only non-empty tokens become candidates: an empty slot would be matched
+	// by an empty bearer token, authorizing a request that supplied no
+	// credential at all.
+	adminTokens := make([]string, 0, 2)
+	for _, token := range []string{options.AdminToken, options.PreviousAdminToken} {
+		if token == "" || slices.Contains(adminTokens, token) {
+			continue
+		}
+		adminTokens = append(adminTokens, token)
 	}
 	server := &Server{
 		store:          options.Store,
@@ -107,7 +114,8 @@ func New(options Options) *Server {
 	if server.metrics != nil {
 		server.handler = server.metrics.middleware(mux)
 	}
-	ready := options.Store != nil && options.ProjectID != "" && options.IngestKey != "" && options.AdminToken != ""
+	ready := options.Store != nil && options.ProjectID != "" &&
+		options.IngestKey != "" && len(adminTokens) > 0
 	if options.DemoOnly {
 		ready = server.demoStore != nil
 	}

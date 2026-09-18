@@ -62,7 +62,8 @@ Notable changes to Error-Tracer are documented here. The project follows
   startup is not delayed in proportion to the expired-issue backlog.
 - The admin availability guard accepts any configured token instead of only the
   current one, so a caller that supplies only a previous token is authorized
-  rather than told the API is unavailable.
+  rather than told the API is unavailable. Empty slots are excluded from the
+  candidate list, and readiness uses the same rule.
 - Two dashboard text colours fell below the WCAG AA 4.5:1 contrast minimum at
   the 10-12px sizes they were used at: `--subtle` reached 3.90:1 against the
   panel surface and the admin-token placeholder only 2.45:1.

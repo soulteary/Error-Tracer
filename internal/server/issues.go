@@ -165,7 +165,7 @@ func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bool {
-	if s.store == nil || s.projectID == "" || !hasUsableAdminToken(s.adminTokens) {
+	if s.store == nil || s.projectID == "" || len(s.adminTokens) == 0 {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "admin_unavailable"})
 		return false
 	}
@@ -176,18 +176,6 @@ func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bo
 		return false
 	}
 	return true
-}
-
-// hasUsableAdminToken reports whether any configured token can authorize a
-// request. Checking only the first slot returned 503 for an Options value that
-// carried a credential in a later one.
-func hasUsableAdminToken(tokens []string) bool {
-	for _, token := range tokens {
-		if token != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func parseListOptions(request *http.Request) (store.ListOptions, error) {

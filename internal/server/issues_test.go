@@ -561,4 +561,41 @@ func TestAdminAuthorizationAcceptsAnyConfiguredToken(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body = %s",
 			response.Code, http.StatusOK, response.Body.String())
 	}
+
+	// Readiness has to agree, or an orchestrator keeps a working deployment
+	// out of service.
+	readiness := httptest.NewRecorder()
+	app.Handler().ServeHTTP(readiness, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readiness.Code != http.StatusOK {
+		t.Fatalf("/readyz status = %d, want %d", readiness.Code, http.StatusOK)
+	}
+}
+
+func TestAdminAuthorizationRejectsAnEmptyBearerToken(t *testing.T) {
+	// An empty slot in the candidate list is matched by an empty bearer
+	// token, which would authorize a request that carried no credential.
+	app := New(Options{
+		Store:              store.NewMemory(),
+		ProjectID:          "project-a",
+		IngestKey:          "0123456789abcdef",
+		PreviousAdminToken: "0123456789abcdefghijklmn",
+	})
+	for _, token := range app.adminTokens {
+		if token == "" {
+			t.Fatalf("adminTokens = %q, want no empty candidate", app.adminTokens)
+		}
+	}
+
+	for _, header := range []string{"Bearer ", "Bearer", "bearer ", "Bearer  "} {
+		t.Run(header, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil)
+			request.Header.Set("Authorization", header)
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d; body = %s",
+					response.Code, http.StatusUnauthorized, response.Body.String())
+			}
+		})
+	}
 }
