@@ -124,7 +124,11 @@ fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。�
 批次，会直接丢弃并计入客户端统计，而不会发送超限请求。
 
 在可控的页面关闭流程中，可调用 `await tracer.flush()` 并检查返回值；
-`tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。
+`tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。`dropped` 表示事件
+确实丢失；客户端有意丢弃的事件单独计数，以便把"采集端本来就安静"和"配置有问题"
+区分开：`sampled`（未通过 `sampleRate`）、`suppressed`（`beforeSend` 返回 null
+或抛出）、`throttled`（超出 `maxEventsPerMinute`）、`invalid`（候选事件无法归一）。
+`destroy()` 是硬停止：它会先把已排队的事件发出，之后拒绝继续采集。
 `captureMessage` 或 `captureException` 成功只表示未满批次已进入本地队列，
 `flush()` 才表示本轮所有批次是否都被传输层接受。如果已有 flush 正在执行，
 返回的 Promise 还会等待调用 `flush()` 时已排队的事件。客户端还支持

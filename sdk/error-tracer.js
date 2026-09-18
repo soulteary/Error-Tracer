@@ -110,8 +110,13 @@
         failed: 0,
         batches: 0,
         retries: 0,
+        sampled: 0,
+        suppressed: 0,
+        throttled: 0,
+        invalid: 0,
       };
       this.installed = false;
+      this.stopped = false;
       this.errorListener = (event) => this.captureWindowError(event);
       this.rejectionListener = (event) => this.captureUnhandledRejection(event);
       this.pagehideListener = () => this.settle(this.flush());
@@ -127,7 +132,9 @@
     }
 
     install() {
-      if (this.installed || !this.runtime) {
+      // destroy() is permanent: capture() refuses everything afterwards, so
+      // reattaching would report success and leave inert listeners behind.
+      if (this.stopped || this.installed || !this.runtime) {
         return false;
       }
       if (typeof this.runtime.addEventListener !== "function" ||
@@ -163,6 +170,7 @@
     }
 
     destroy() {
+      this.stopped = true;
       if (this.installed && this.runtime &&
           typeof this.runtime.removeEventListener === "function") {
         removeListener(this.runtime, "error", this.errorListener, true);
@@ -253,16 +261,25 @@
     }
 
     capture(candidate) {
+      // destroy() is a hard stop: without this, a late handler or a manual
+      // capture would re-queue, re-arm the flush timer on the runtime, and
+      // transmit after teardown.
+      if (this.stopped) {
+        return Promise.resolve(false);
+      }
       if (this.sampleRate === 0) {
+        this.stats.sampled++;
         return Promise.resolve(false);
       }
       let randomValue;
       try {
         randomValue = this.random();
       } catch (_) {
+        this.stats.invalid++;
         return Promise.resolve(false);
       }
       if (!Number.isFinite(randomValue) || randomValue < 0 || randomValue >= this.sampleRate) {
+        this.stats.sampled++;
         return Promise.resolve(false);
       }
 
@@ -270,26 +287,32 @@
       try {
         captured = this.normalize(candidate, true);
       } catch (_) {
+        this.stats.invalid++;
         return Promise.resolve(false);
       }
       if (!captured) {
+        this.stats.invalid++;
         return Promise.resolve(false);
       }
       if (this.beforeSend) {
         try {
           captured = this.beforeSend(cloneEvent(captured));
         } catch (_) {
+          this.stats.suppressed++;
           return Promise.resolve(false);
         }
         if (captured === null || captured === false) {
+          this.stats.suppressed++;
           return Promise.resolve(false);
         }
         try {
           captured = this.normalize(captured, false);
         } catch (_) {
+          this.stats.invalid++;
           return Promise.resolve(false);
         }
         if (!captured) {
+          this.stats.invalid++;
           return Promise.resolve(false);
         }
       }
@@ -298,6 +321,7 @@
       try {
         now = validDate(this.clock());
       } catch (_) {
+        this.stats.invalid++;
         return Promise.resolve(false);
       }
       captured.occurred_at = validISODate(captured.occurred_at) || now.toISOString();
@@ -309,6 +333,7 @@
         return Promise.resolve(false);
       }
       if (!this.hasBudget(now.getTime())) {
+        this.stats.throttled++;
         return Promise.resolve(false);
       }
 
@@ -378,6 +403,14 @@
       const cutoff = now - 60_000;
       while (this.sentAt.length && this.sentAt[0] <= cutoff) {
         this.sentAt.shift();
+      }
+      // A backward clock step — an NTP correction, a VM resume, a user
+      // changing the clock — leaves every stored stamp in the future, where
+      // the cutoff above can never reach it. Capture would then refuse every
+      // event until real time caught up. Stamps ahead of now cannot belong to
+      // the current window, so drop them.
+      if (this.sentAt.length && this.sentAt[this.sentAt.length - 1] > now) {
+        this.sentAt = this.sentAt.filter((stamp) => stamp <= now);
       }
       return this.sentAt.length < this.maxEventsPerMinute;
     }
@@ -554,17 +587,30 @@
     }
 
     scheduleFlush() {
-      if (this.flushTimer !== null || !this.queue.length || this.flushInterval === 0) {
+      if (this.stopped || this.flushTimer !== null ||
+          !this.queue.length || this.flushInterval === 0) {
         return;
       }
       const setTimer = safeRead(this.runtime, "setTimeout");
       if (typeof setTimer !== "function") {
         return;
       }
-      this.flushTimer = setTimer.call(this.runtime, () => {
+      // Every other call into host-supplied code is guarded; a page that
+      // patches timers to throw would otherwise throw out of captureMessage.
+      try {
+        this.flushTimer = setTimer.call(this.runtime, () => {
+          this.flushTimer = null;
+          this.settle(this.flush());
+        }, this.flushInterval);
+      } catch (_) {
+        // No timer means nothing would ever drain the queue on a quiet page,
+        // and capture() has already resolved true. Deliver now instead of
+        // stranding the event. The flush empties the queue, so the
+        // scheduleFlush that runs when it settles returns at the guard above.
         this.flushTimer = null;
         this.settle(this.flush());
-      }, this.flushInterval);
+        return;
+      }
       if (this.flushTimer && typeof this.flushTimer.unref === "function") {
         this.flushTimer.unref();
       }
@@ -576,7 +622,11 @@
       }
       const clearTimer = safeRead(this.runtime, "clearTimeout");
       if (typeof clearTimer === "function") {
-        clearTimer.call(this.runtime, this.flushTimer);
+        try {
+          clearTimer.call(this.runtime, this.flushTimer);
+        } catch (_) {
+          // A patched clearTimeout must not throw into the host page.
+        }
       }
       this.flushTimer = null;
     }
@@ -589,6 +639,10 @@
         failed: this.stats.failed,
         batches: this.stats.batches,
         retries: this.stats.retries,
+        sampled: this.stats.sampled,
+        suppressed: this.stats.suppressed,
+        throttled: this.stats.throttled,
+        invalid: this.stats.invalid,
       });
     }
   }

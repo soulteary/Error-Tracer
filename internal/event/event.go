@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -51,6 +52,21 @@ type Event struct {
 	Environment string            `json:"environment,omitempty"`
 	UserAgent   string            `json:"user_agent,omitempty"`
 	Tags        map[string]string `json:"tags,omitempty"`
+}
+
+// TruncateUserAgent bounds a collector-assigned User-Agent to the ingest limit,
+// on a rune boundary. The server owns this field — it is taken from a request
+// header the reporting client cannot shorten — so an oversized header must not
+// fail validation as though the client had sent an invalid value.
+func TruncateUserAgent(value string) string {
+	if len(value) <= maxUserAgentLength {
+		return value
+	}
+	truncated := value[:maxUserAgentLength]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 // ValidationError identifies a client-controlled field that violates the

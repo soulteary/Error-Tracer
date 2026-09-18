@@ -210,7 +210,7 @@ func (s *Server) ingestBatch(w http.ResponseWriter, request *http.Request) {
 func (s *Server) prepareEvent(captured event.Event, userAgent string) (event.Event, error) {
 	captured.ID = ""
 	captured.ReceivedAt = s.now().UTC()
-	captured.UserAgent = userAgent
+	captured.UserAgent = event.TruncateUserAgent(userAgent)
 	captured.Normalize()
 	if err := captured.Validate(); err != nil {
 		return event.Event{}, err

@@ -47,9 +47,23 @@ Notable changes to Error-Tracer are documented here. The project follows
 - The in-memory store clones only the issues it returns rather than every match
   in the project, cutting a 50-row page over 1,000 issues from 2,016 to 117
   allocations.
+- `getStats()` reports four additional counters — `sampled`, `suppressed`,
+  `throttled`, and `invalid` — so events the SDK discards on purpose are
+  visible instead of silent. `dropped` continues to mean an event was lost.
 
 ### Fixed
 
+- The browser SDK stopped capturing entirely after a backward clock step — an
+  NTP correction, a VM resume — because every stored rate-window stamp sat in
+  the future where the 60-second cutoff could not reach it.
+- `destroy()` is a hard stop. It still flushes what is queued, but a later
+  capture no longer re-queues, re-arms the flush timer, or transmits.
+- The SDK's flush timer calls are guarded, so a page that patches `setTimeout`
+  or `clearTimeout` to throw cannot throw out of `captureMessage`.
+- An oversized `User-Agent` request header rejected an otherwise valid event
+  with `422 invalid_event` naming `user_agent` — a field the collector assigns
+  and the reporting client cannot shorten. It is now truncated to the ingest
+  limit on a rune boundary.
 - A stack whose first line contained `@` and ended in `:<digits>` — an ordinary
   message line, not a frame — was taken for a SpiderMonkey frame, so every
   error sharing that line grouped into one issue regardless of its real call

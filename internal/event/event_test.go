@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestNormalizeRemovesSensitiveURLComponents(t *testing.T) {
@@ -487,5 +488,27 @@ func TestFirstStackFrameStillRecognizesFirefoxFrames(t *testing.T) {
 				t.Fatalf("firstStackFrame() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestTruncateUserAgent(t *testing.T) {
+	if got := TruncateUserAgent("curl/8.0"); got != "curl/8.0" {
+		t.Fatalf("TruncateUserAgent() = %q, want it unchanged", got)
+	}
+	if got := TruncateUserAgent(strings.Repeat("u", 2000)); len(got) != 1024 {
+		t.Fatalf("length = %d, want 1024", len(got))
+	}
+	// A multi-byte rune must not be split across the boundary.
+	multibyte := TruncateUserAgent(strings.Repeat("界", 2000))
+	if len(multibyte) > 1024 {
+		t.Fatalf("length = %d, want at most 1024", len(multibyte))
+	}
+	if !utf8.ValidString(multibyte) {
+		t.Fatalf("TruncateUserAgent() = %q, want valid UTF-8", multibyte)
+	}
+	captured := Event{Kind: KindError, Message: "boom", UserAgent: multibyte}
+	captured.Normalize()
+	if err := captured.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want a truncated agent to pass", err)
 	}
 }
