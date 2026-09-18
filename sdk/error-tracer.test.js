@@ -1099,3 +1099,49 @@ function fakeEventTarget() {
 function eventLoopTurn() {
   return new Promise((resolve) => setImmediate(resolve));
 }
+
+test("delivers an event whose stack fills LIMITS.stack", async () => {
+  // The default maxBatchBytes used to be the 60 KiB Beacon limit while
+  // truncation kept stacks up to 64 KiB, so a deep-recursion trace was
+  // dropped by capture() without ever reaching the transport.
+  const bodies = [];
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    clock: () => FIXED_TIME,
+    transport(body) {
+      bodies.push(body);
+      return true;
+    },
+  });
+
+  const error = new Error("stack overflow");
+  error.stack = "RangeError: Maximum call stack size exceeded\n" +
+    "    at recurse (https://app.example.com/app.js:1:1)\n".repeat(1200);
+  assert.ok(error.stack.length > 60 * 1024);
+
+  assert.equal(await tracer.captureException(error), true);
+  await tracer.flush();
+
+  assert.equal(bodies.length, 1);
+  assert.equal(tracer.getStats().sent, 1);
+  assert.equal(tracer.getStats().dropped, 0);
+  const payload = JSON.parse(bodies[0]);
+  assert.equal(payload.events.length, 1);
+  assert.ok(payload.events[0].stack.length > 60 * 1024);
+});
+
+test("still drops a single event larger than a configured maxBatchBytes", async () => {
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    maxBatchBytes: 1024,
+    clock: () => FIXED_TIME,
+    transport() {
+      throw new Error("transport must not be called");
+    },
+  });
+
+  assert.equal(await tracer.captureMessage("x".repeat(4000)), false);
+  assert.equal(tracer.getStats().dropped, 1);
+});

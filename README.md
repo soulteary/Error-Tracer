@@ -131,12 +131,15 @@ event already being delivered is excluded, but repeated timer or explicit
 flushes cannot create an unbounded chained backlog. `getStats().queued` reports
 both the ordinary queue and those reserved snapshots.
 
-`maxBatchBytes` defaults to 60 KiB so unload-time requests stay within the
-portable `sendBeacon`/fetch keepalive budget. A larger custom value is allowed,
-but payloads above that keepalive budget use a normal fetch and therefore need
-an explicit `await tracer.flush()` when delivery must be observed. An event
-that cannot fit in its own configured batch is dropped and counted in the
-client statistics instead of being sent as an oversized request.
+`maxBatchBytes` defaults to 256 KiB, above the largest single event the client
+truncation can produce, so a full-size stack trace is never dropped before it
+reaches the transport. The transport still chooses per payload: a body within
+the portable 60 KiB `sendBeacon`/fetch keepalive budget uses Beacon, and a
+larger one uses a normal fetch and therefore needs an explicit
+`await tracer.flush()` when delivery must be observed. Lower `maxBatchBytes`
+to keep every request inside the keepalive budget. An event that cannot fit in
+its own configured batch is dropped and counted in the client statistics
+instead of being sent as an oversized request.
 
 Call `await tracer.flush()` before a controlled shutdown when delivery should
 be observed, and use `tracer.getStats()` to inspect queued, sent, retried,

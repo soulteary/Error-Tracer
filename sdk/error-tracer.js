@@ -21,6 +21,14 @@
     tagValue: 256,
   });
   const KEEPALIVE_BODY_LIMIT = 60 * 1024;
+  // A single event that survives truncation can reach roughly 82 KiB before
+  // JSON escaping (a 64 KiB stack, a 4 KiB message, two URLs and 32 tags), so
+  // the default body ceiling has to sit above KEEPALIVE_BODY_LIMIT. Using the
+  // Beacon limit as the default made capture() drop exactly the deep-recursion
+  // traces LIMITS.stack was sized to keep. defaultTransport still chooses
+  // Beacon per body, so ordinary batches are unaffected, and the ceiling stays
+  // well under the collector's 1 MiB batch limit.
+  const DEFAULT_MAX_BATCH_BYTES = 256 * 1024;
   const EVENT_KINDS = new Set(["error", "unhandled_rejection", "resource_error"]);
   const parseJSON = JSON.parse;
 
@@ -74,7 +82,7 @@
         options.retryBaseDelay, 250, 1, 10_000, "retryBaseDelay",
       );
       this.maxBatchBytes = integerOption(
-        options.maxBatchBytes, KEEPALIVE_BODY_LIMIT, 1024, 900 * 1024, "maxBatchBytes",
+        options.maxBatchBytes, DEFAULT_MAX_BATCH_BYTES, 1024, 900 * 1024, "maxBatchBytes",
       );
 
       this.release = truncateUTF8(cleanString(options.release), LIMITS.release);

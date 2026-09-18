@@ -116,11 +116,12 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 但重复的定时或显式 flush 无法形成无界的链式积压。`getStats().queued` 会同时统计
 普通队列和这些已保留快照。
 
-`maxBatchBytes` 默认为 60 KiB，以满足不同浏览器对 `sendBeacon`/fetch
-keepalive 请求体的通用限制。可以配置更大的值，但超过 keepalive 边界的载荷
-会改用普通 fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。
-单个事件若无法放入自身的批次，会直接丢弃并计入客户端统计，而不会发送超限
-请求。
+`maxBatchBytes` 默认为 256 KiB，高于客户端截断所能产生的最大单事件，因此完整
+的栈信息不会在到达传输层之前被丢弃。传输层仍按每个载荷选择：在 60 KiB 通用
+`sendBeacon`/fetch keepalive 边界之内的载荷使用 Beacon，超出的载荷改用普通
+fetch；如果必须确认送达，需要显式执行 `await tracer.flush()`。若希望所有请求
+都落在 keepalive 边界内，可以调低 `maxBatchBytes`。单个事件若无法放入自身的
+批次，会直接丢弃并计入客户端统计，而不会发送超限请求。
 
 在可控的页面关闭流程中，可调用 `await tracer.flush()` 并检查返回值；
 `tracer.getStats()` 可查看排队、成功、重试、失败和丢弃数量。
