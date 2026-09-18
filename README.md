@@ -143,7 +143,13 @@ instead of being sent as an oversized request.
 
 Call `await tracer.flush()` before a controlled shutdown when delivery should
 be observed, and use `tracer.getStats()` to inspect queued, sent, retried,
-failed, and dropped counts. A successful `captureMessage` or
+failed, and dropped counts. `dropped` means an event was lost. Events the
+client discarded on purpose are counted separately, so a quiet collector can be
+told apart from a misconfigured one: `sampled` (below `sampleRate`),
+`suppressed` (`beforeSend` returned null or threw), `throttled` (over
+`maxEventsPerMinute`), and `invalid` (the candidate could not be normalized).
+`destroy()` is a hard stop: it flushes what is already queued and then refuses
+further capture. A successful `captureMessage` or
 `captureException` means that a partial batch was accepted into the local
 queue; `flush()` reports whether every batch in that flush was accepted by the
 transport. If another flush is already active, the returned promise also waits

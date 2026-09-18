@@ -437,6 +437,7 @@ test("retries events when grouping serialization temporarily fails", async () =>
   );
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 2, dropped: 0, failed: 0, batches: 2, retries: 1,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -618,12 +619,14 @@ test("queues events and sends an atomic batch", async () => {
   assert.equal(await client.captureMessage("one"), true);
   assert.deepEqual(client.getStats(), {
     queued: 1, sent: 0, dropped: 0, failed: 0, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
   assert.equal(await client.captureMessage("two"), true);
   assert.equal(payloads.length, 1);
   assert.deepEqual(payloads[0].events.map((item) => item.message), ["one", "two"]);
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 2, dropped: 0, failed: 0, batches: 1, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -660,6 +663,7 @@ test("drops an event that exceeds maxBatchBytes by itself", async () => {
   assert.equal(transportCalled, false);
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -724,6 +728,7 @@ test("bounds the queue while another batch is in flight", async () => {
   );
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 3, dropped: 1, failed: 0, batches: 3, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -750,6 +755,7 @@ test("rejects an oversized event before it can evict queued events", async () =>
   assert.equal(await client.captureMessage("x".repeat(2000)), false);
   assert.deepEqual(client.getStats(), {
     queued: 2, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 
   releaseFirst(true);
@@ -819,6 +825,7 @@ test("flush reserves the events queued when it is called", async () => {
   assert.equal(await client.captureMessage("three"), false);
   assert.deepEqual(client.getStats(), {
     queued: 1, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 
   releaseFirst(true);
@@ -863,6 +870,7 @@ test("bounds snapshots reserved behind a stalled delivery", async () => {
   assert.equal(await client.captureMessage("five"), false);
   assert.deepEqual(client.getStats(), {
     queued: 3, sent: 0, dropped: 1, failed: 0, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 
   releaseFirst(true);
@@ -874,6 +882,7 @@ test("bounds snapshots reserved behind a stalled delivery", async () => {
   );
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 4, dropped: 1, failed: 0, batches: 4, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -916,6 +925,7 @@ test("keeps unsent sub-batches reserved behind a stalled sub-batch", async () =>
   }
   assert.deepEqual(client.getStats(), {
     queued: 3, sent: 2, dropped: 1, failed: 0, batches: 1, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 
   releaseSecond(true);
@@ -927,6 +937,7 @@ test("keeps unsent sub-batches reserved behind a stalled sub-batch", async () =>
   );
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 7, dropped: 1, failed: 0, batches: 4, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -959,6 +970,7 @@ test("keeps initial unsent sub-batches reserved behind a stalled sub-batch", asy
   }
   assert.deepEqual(client.getStats(), {
     queued: 3, sent: 0, dropped: 2, failed: 0, batches: 0, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 
   releaseFirst(true);
@@ -970,6 +982,7 @@ test("keeps initial unsent sub-batches reserved behind a stalled sub-batch", asy
   );
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 4, dropped: 2, failed: 0, batches: 4, retries: 0,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -998,6 +1011,7 @@ test("retries failed batches with a finite budget", async () => {
   assert.equal(attempts, 3);
   assert.deepEqual(client.getStats(), {
     queued: 0, sent: 0, dropped: 1, failed: 1, batches: 0, retries: 2,
+    sampled: 0, suppressed: 0, throttled: 0, invalid: 0,
   });
 });
 
@@ -1227,4 +1241,99 @@ test("derives the batch endpoint from a bare origin", () => {
     });
     assert.equal(tracer.batchEndpoint, want, endpoint);
   }
+});
+
+test("survives a backward clock step", async () => {
+  // A backward step left every stored budget stamp in the future, where the
+  // 60-second cutoff could never reach it, so capture refused every event
+  // until real time caught up.
+  let now = new Date("2026-09-18T12:00:00.000Z");
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    maxEventsPerMinute: 3,
+    clock: () => now,
+    transport: () => true,
+  });
+
+  for (let index = 0; index < 3; index++) {
+    assert.equal(await tracer.captureMessage("before-" + index), true);
+  }
+  now = new Date("2026-09-18T11:00:00.000Z");
+  assert.equal(await tracer.captureMessage("after-jump"), true);
+  assert.equal(tracer.getStats().throttled, 0);
+});
+
+test("counts every path that discards an event", async () => {
+  const at = () => new Date("2026-09-18T12:00:00.000Z");
+  const base = { projectKey: PROJECT_KEY, autoCapture: false, clock: at, transport: () => true };
+
+  const sampled = ErrorTracer.init({ ...base, sampleRate: 0 });
+  await sampled.captureMessage("dropped by sampling");
+  assert.equal(sampled.getStats().sampled, 1);
+
+  const suppressed = ErrorTracer.init({ ...base, beforeSend: () => null });
+  await suppressed.captureMessage("dropped by the hook");
+  assert.equal(suppressed.getStats().suppressed, 1);
+
+  const throttled = ErrorTracer.init({ ...base, maxEventsPerMinute: 1 });
+  await throttled.captureMessage("first");
+  await throttled.captureMessage("over budget");
+  assert.equal(throttled.getStats().throttled, 1);
+
+  // normalize() rejects a non-resource event with no message.
+  const invalid = ErrorTracer.init({ ...base });
+  await invalid.capture({ kind: "error", message: "   " });
+  assert.equal(invalid.getStats().invalid, 1);
+
+  // The deliberate drops stay out of `dropped`, which still means lost.
+  for (const tracer of [sampled, suppressed, throttled, invalid]) {
+    assert.equal(tracer.getStats().dropped, 0);
+  }
+});
+
+test("destroy stops capture but still flushes what is queued", async () => {
+  const sent = [];
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    clock: () => FIXED_TIME,
+    transport(body) {
+      sent.push(body);
+      return true;
+    },
+  });
+
+  assert.equal(await tracer.captureMessage("queued before teardown"), true);
+  tracer.destroy();
+  await tracer.flush();
+  assert.equal(sent.length, 1, "the queued event should still ship");
+
+  // After teardown nothing re-queues, re-arms a timer, or transmits.
+  assert.equal(await tracer.captureMessage("after teardown"), false);
+  await tracer.flush();
+  assert.equal(sent.length, 1);
+  assert.equal(tracer.getStats().queued, 0);
+});
+
+test("a throwing runtime timer does not escape into the page", async () => {
+  const tracer = ErrorTracer.init({
+    projectKey: PROJECT_KEY,
+    autoCapture: false,
+    batchSize: 10,
+    flushInterval: 1000,
+    clock: () => FIXED_TIME,
+    runtime: {
+      setTimeout() {
+        throw new Error("timers are patched");
+      },
+      clearTimeout() {
+        throw new Error("timers are patched");
+      },
+    },
+    transport: () => true,
+  });
+
+  assert.equal(await tracer.captureMessage("boom"), true);
+  tracer.destroy();
 });

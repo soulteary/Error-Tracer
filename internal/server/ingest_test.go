@@ -474,3 +474,37 @@ func TestIngestLogsStoreFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestIngestTruncatesServerAssignedUserAgent(t *testing.T) {
+	// user_agent is assigned by the collector from a request header the client
+	// cannot shorten, so an oversized header used to reject an otherwise valid
+	// event with 422 invalid_event naming a field the client never sent.
+	memory := store.NewMemory()
+	app := New(Options{
+		Store:     memory,
+		ProjectID: "project-a",
+		IngestKey: "0123456789abcdef",
+	})
+	body := `{"project_key":"0123456789abcdef","event":{"kind":"error","message":"boom"}}`
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/events", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("User-Agent", strings.Repeat("u", 1100))
+	response := httptest.NewRecorder()
+
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d; body = %s",
+			response.Code, http.StatusAccepted, response.Body.String())
+	}
+	page, err := memory.ListIssues(context.Background(), "project-a", store.ListOptions{})
+	if err != nil {
+		t.Fatalf("list stored issues: %v", err)
+	}
+	if page.Total != 1 {
+		t.Fatalf("stored issues = %d, want 1", page.Total)
+	}
+	if got := len(page.Issues[0].LastEvent.UserAgent); got != 1024 {
+		t.Fatalf("stored user_agent length = %d, want 1024", got)
+	}
+}
