@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1315,4 +1317,79 @@ func waitForSQLiteConnectionUse(t *testing.T, database *sql.DB, description stri
 		case <-ticker.C:
 		}
 	}
+}
+
+func TestSQLiteReadOnlyDataSourceNameResolvesRelativePaths(t *testing.T) {
+	directory := t.TempDir()
+	chdir(t, directory)
+
+	dataSourceName, err := sqliteReadOnlyDataSourceName("error-tracer.db")
+	if err != nil {
+		t.Fatalf("sqliteReadOnlyDataSourceName() error = %v", err)
+	}
+	// "file://error-tracer.db" makes SQLite read the first path segment as a
+	// URI authority and reject the whole data source name.
+	if !strings.HasPrefix(dataSourceName, "file:///") {
+		t.Fatalf("dataSourceName = %q, want a file:/// URI", dataSourceName)
+	}
+	want := (&url.URL{Scheme: "file", Path: filepath.Join(directory, "error-tracer.db")}).String()
+	if !strings.HasPrefix(dataSourceName, want+"?") {
+		t.Fatalf("dataSourceName = %q, want prefix %q", dataSourceName, want)
+	}
+
+	explicit, err := sqliteReadOnlyDataSourceName("file:error-tracer.db")
+	if err != nil {
+		t.Fatalf("explicit sqliteReadOnlyDataSourceName() error = %v", err)
+	}
+	if !strings.HasPrefix(explicit, "file:error-tracer.db?") {
+		t.Fatalf("explicit dataSourceName = %q, want an unchanged file: URI", explicit)
+	}
+	for _, parameter := range []string{"mode=ro", "_busy_timeout=5000", "_foreign_keys=on"} {
+		if !strings.Contains(dataSourceName, parameter) {
+			t.Fatalf("dataSourceName = %q, want it to contain %q", dataSourceName, parameter)
+		}
+	}
+}
+
+func TestSQLiteMaintenanceAcceptsRelativePaths(t *testing.T) {
+	directory := t.TempDir()
+	chdir(t, directory)
+
+	database := openTestSQLite(t, filepath.Join(directory, "error-tracer.db"))
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	relative, err := OpenSQLiteReadOnly(context.Background(), "error-tracer.db")
+	if err != nil {
+		t.Fatalf("OpenSQLiteReadOnly(relative) error = %v", err)
+	}
+	if err := relative.IntegrityCheck(context.Background()); err != nil {
+		t.Fatalf("relative IntegrityCheck() error = %v", err)
+	}
+	if err := relative.Close(); err != nil {
+		t.Fatalf("relative Close() error = %v", err)
+	}
+
+	source := openTestSQLite(t, filepath.Join(directory, "error-tracer.db"))
+	// The snapshot is staged next to the destination, so a relative
+	// destination also has to survive the read-only reopen that verifies it.
+	if err := source.Backup(context.Background(), "./backup.db"); err != nil {
+		t.Fatalf("Backup(relative destination) error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "backup.db")); err != nil {
+		t.Fatalf("stat relative backup: %v", err)
+	}
+}
+
+func chdir(t *testing.T, directory string) {
+	t.Helper()
+	working, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatalf("Chdir(%q) error = %v", directory, err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(working) })
 }
