@@ -290,7 +290,13 @@ func firstStackLine(stack string) string {
 	return ""
 }
 
-var firefoxStackFramePattern = regexp.MustCompile(`^[^@:\r\n]*@\S+:\d+(?::\d+)?$`)
+// firefoxStackFramePattern matches a SpiderMonkey frame, "name@url:line:col".
+// The name segment excludes whitespace as well as "@" and ":": a function name
+// never contains a space, and allowing one let an ordinary message line such as
+// "connect to alice@example.com:443" pass as a frame, so every error sharing
+// that first line collapsed into a single issue regardless of its real call
+// site.
+var firefoxStackFramePattern = regexp.MustCompile(`^[^@:\s]*@\S+:\d+(?::\d+)?$`)
 
 func isV8StackFrame(frame string) bool {
 	if !strings.HasPrefix(frame, "at ") {

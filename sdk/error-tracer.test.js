@@ -1201,3 +1201,30 @@ test("strips credentials when the URL constructor is unavailable", async () => {
   const event = JSON.parse(bodies[0]).events[0];
   assert.equal(event.source_url, "https://app.example.com/app.js");
 });
+
+test("derives the batch endpoint from a bare origin", () => {
+  // A bare origin used to yield "<origin>/batch", a route the collector does
+  // not register, so every batch 404'd and burned the retry budget.
+  const cases = [
+    ["https://errors.example.com/api/v1/events", "https://errors.example.com/api/v1/events/batch"],
+    ["https://errors.example.com", "https://errors.example.com/api/v1/events/batch"],
+    ["https://errors.example.com/", "https://errors.example.com/api/v1/events/batch"],
+    ["https://errors.example.com:8443", "https://errors.example.com:8443/api/v1/events/batch"],
+    // A custom path is preserved so a proxy prefix keeps working.
+    ["https://errors.example.com/collect", "https://errors.example.com/collect/batch"],
+    [
+      "https://errors.example.com/api/v1/events/batch",
+      "https://errors.example.com/api/v1/events/batch",
+    ],
+  ];
+
+  for (const [endpoint, want] of cases) {
+    const tracer = ErrorTracer.init({
+      projectKey: PROJECT_KEY,
+      endpoint,
+      autoCapture: false,
+      transport: () => true,
+    });
+    assert.equal(tracer.batchEndpoint, want, endpoint);
+  }
+});

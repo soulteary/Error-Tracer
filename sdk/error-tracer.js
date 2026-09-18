@@ -604,7 +604,16 @@
     if (path.endsWith(suffix)) {
       return path + "/batch" + parameters;
     }
-    return path.replace(/\/$/, "") + "/batch" + parameters;
+    const root = path.replace(/\/$/, "");
+    // A bare origin has no path to append "/batch" to, and "/batch" at the
+    // root is not a route the collector registers, so every batch would 404
+    // and burn the retry budget. Use the default collector path instead.
+    // A non-empty custom path is preserved, so a proxy that rewrites its own
+    // prefix onto /api/v1/events keeps working.
+    if (!root || /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]*$/.test(root)) {
+      return root + suffix + "/batch" + parameters;
+    }
+    return root + "/batch" + parameters;
   }
 
   function defaultTransport(runtime, endpoint) {

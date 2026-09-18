@@ -73,3 +73,25 @@ func TestMetricsExposeBoundedPrometheusSeries(t *testing.T) {
 		t.Fatalf("metrics contain an unbounded or self-scrape route:\n%s", body)
 	}
 }
+
+func TestMetricLabelEscapesExactlyOnce(t *testing.T) {
+	// metricLabel emits the three escapes the Prometheus text format defines.
+	// Writing its result with %q escaped it again, so a quote in a label value
+	// was exposed as a\"b instead of a"b.
+	metrics := newServiceMetrics()
+	metrics.observe(
+		&http.Request{Method: `GE"T`, Pattern: `/api/v1/is"sues`},
+		http.StatusOK, 0.001,
+	)
+
+	exposition := metrics.render(true, true, false)
+
+	// The method label is deliberately collapsed to a fixed set, so the route
+	// is the label that can carry an arbitrary character.
+	if want := `route="/api/v1/is\"sues"`; !strings.Contains(exposition, want) {
+		t.Fatalf("exposition = %q, want it to contain %q", exposition, want)
+	}
+	if strings.Contains(exposition, `\\"`) {
+		t.Fatalf("exposition = %q, want no double-escaped quote", exposition)
+	}
+}

@@ -209,12 +209,18 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 	}
 	options = normalizeListOptions(options)
 
+	// Collect shallow copies and defer cloneIssue to the page that is actually
+	// returned: deep-cloning every match first allocated a Tags map per issue
+	// across the whole project before discarding all but Limit of them. A
+	// stored Issue is never mutated in place — a writer replaces the whole map
+	// value and cloneEvent always builds a fresh Tags map — so the deferred
+	// clone is safe outside the lock.
 	m.mu.RLock()
 	issues := make([]Issue, 0)
 	for _, issue := range m.issues {
 		if issue.ProjectID == projectID &&
 			(options.Status == "" || issue.Status == options.Status) {
-			issues = append(issues, cloneIssue(issue))
+			issues = append(issues, issue)
 		}
 	}
 	m.mu.RUnlock()
@@ -239,8 +245,14 @@ func (m *Memory) ListIssues(ctx context.Context, projectID string, options ListO
 		last := issues[end-1]
 		next = &ListCursor{LastSeen: last.LastSeen, Fingerprint: last.Fingerprint}
 	}
+	// A fresh slice rather than issues[start:end], which would pin the whole
+	// filtered backing array for as long as the page is referenced.
+	page := make([]Issue, 0, end-start)
+	for _, issue := range issues[start:end] {
+		page = append(page, cloneIssue(issue))
+	}
 	return IssuePage{
-		Issues: issues[start:end],
+		Issues: page,
 		Total:  total,
 		Limit:  options.Limit,
 		Offset: options.Offset,
