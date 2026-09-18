@@ -53,6 +53,16 @@ Notable changes to Error-Tracer are documented here. The project follows
 
 ### Fixed
 
+- A paginated response whose cursor could not be encoded dropped
+  `next_cursor` entirely, which a client reads as the end of the walk. The
+  invariant violation is now logged and reported as `500 internal_error`.
+- Issue and health responses carry `X-Content-Type-Options: nosniff`, which the
+  asset, dashboard, and metrics responses already set.
+- The first retention sweep no longer runs before the listener opens, so
+  startup is not delayed in proportion to the expired-issue backlog.
+- The admin availability guard accepts any configured token instead of only the
+  current one, so a caller that supplies only a previous token is authorized
+  rather than told the API is unavailable.
 - Two dashboard text colours fell below the WCAG AA 4.5:1 contrast minimum at
   the 10-12px sizes they were used at: `--subtle` reached 3.90:1 against the
   panel surface and the admin-token placeholder only 2.45:1.

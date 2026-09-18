@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,4 +232,50 @@ func TestRunReportsVersion(t *testing.T) {
 	if code := run(); code != 0 {
 		t.Fatalf("run(version) = %d, want 0", code)
 	}
+}
+
+type blockingPruner struct {
+	release chan struct{}
+	started chan struct{}
+	once    sync.Once
+}
+
+func (p *blockingPruner) PruneIssues(
+	ctx context.Context, _ string, _ time.Time,
+) (int64, error) {
+	p.once.Do(func() { close(p.started) })
+	select {
+	case <-p.release:
+	case <-ctx.Done():
+	}
+	return 0, nil
+}
+
+func TestStartRetentionDoesNotBlockStartup(t *testing.T) {
+	// The first sweep used to run inline, before ListenAndServe, so startup
+	// was delayed in proportion to the expired-issue backlog.
+	pruner := &blockingPruner{
+		release: make(chan struct{}),
+		started: make(chan struct{}),
+	}
+	returned := make(chan func(), 1)
+	go func() {
+		returned <- startRetention(context.Background(), pruner, "project-a", 30)
+	}()
+
+	var stop func()
+	select {
+	case stop = <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startRetention did not return while the first sweep was in flight")
+	}
+
+	select {
+	case <-pruner.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first sweep never ran")
+	}
+
+	close(pruner.release)
+	stop()
 }

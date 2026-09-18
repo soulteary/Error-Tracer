@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"mime"
 	"net/http"
 	"strconv"
@@ -164,7 +165,7 @@ func (s *Server) updateIssue(w http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bool {
-	if s.store == nil || s.projectID == "" || len(s.adminTokens) == 0 || s.adminTokens[0] == "" {
+	if s.store == nil || s.projectID == "" || !hasUsableAdminToken(s.adminTokens) {
 		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "admin_unavailable"})
 		return false
 	}
@@ -175,6 +176,18 @@ func (s *Server) authorizeAdmin(w http.ResponseWriter, request *http.Request) bo
 		return false
 	}
 	return true
+}
+
+// hasUsableAdminToken reports whether any configured token can authorize a
+// request. Checking only the first slot returned 503 for an Options value that
+// carried a credential in a later one.
+func hasUsableAdminToken(tokens []string) bool {
+	for _, token := range tokens {
+		if token != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func parseListOptions(request *http.Request) (store.ListOptions, error) {
@@ -244,16 +257,31 @@ func parseEventListOptions(request *http.Request) (store.EventListOptions, error
 }
 
 func writeIssuePage(w http.ResponseWriter, page store.IssuePage) {
+	// A store that hands back a page with a cursor the encoder rejects has
+	// violated an invariant. Reporting it as an absent next_cursor would tell
+	// the client the walk is finished and silently truncate the result.
+	cursor := encodeIssueCursor(page.Next)
+	if page.Next != nil && cursor == "" {
+		slog.Error("encode issue cursor", "fingerprint", page.Next.Fingerprint)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
 	writeJSON(w, http.StatusOK, issuePageResponse{
 		IssuePage:  page,
-		NextCursor: encodeIssueCursor(page.Next),
+		NextCursor: cursor,
 	})
 }
 
 func writeEventPage(w http.ResponseWriter, page store.EventPage) {
+	cursor := encodeEventCursor(page.Next)
+	if page.Next != nil && cursor == "" {
+		slog.Error("encode event cursor", "sequence", page.Next.Sequence)
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "internal_error"})
+		return
+	}
 	writeJSON(w, http.StatusOK, eventPageResponse{
 		EventPage:  page,
-		NextCursor: encodeEventCursor(page.Next),
+		NextCursor: cursor,
 	})
 }
 

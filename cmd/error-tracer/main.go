@@ -251,11 +251,14 @@ func startRetention(parent context.Context, pruner issuePruner, projectID string
 			slog.Info("pruned expired issues", "deleted", deleted, "retention_days", days)
 		}
 	}
-	sweep()
-
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		// The first sweep runs here rather than inline: it issues one DELETE
+		// transaction per PruneBatchSize rows against SQLite's single writer,
+		// so running it before ListenAndServe delayed the listener in
+		// proportion to the backlog.
+		sweep()
 		ticker := time.NewTicker(retentionSweepInterval)
 		defer ticker.Stop()
 		for {
