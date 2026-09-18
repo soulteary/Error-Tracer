@@ -44,9 +44,21 @@ Notable changes to Error-Tracer are documented here. The project follows
   payload.
 - Compose publishes the host port on `127.0.0.1` by default through the new
   Compose-only `ERROR_TRACER_BIND` setting.
+- The in-memory store clones only the issues it returns rather than every match
+  in the project, cutting a 50-row page over 1,000 issues from 2,016 to 117
+  allocations.
 
 ### Fixed
 
+- A stack whose first line contained `@` and ended in `:<digits>` — an ordinary
+  message line, not a frame — was taken for a SpiderMonkey frame, so every
+  error sharing that line grouped into one issue regardless of its real call
+  site.
+- The browser SDK derived `<origin>/batch` from a bare-origin `endpoint`, a
+  route the collector does not register, so every batch failed and exhausted
+  the retry budget. A custom path is still preserved for proxy prefixes.
+- Prometheus label values were escaped twice, exposing a quoted value as
+  `a\"b` rather than `a"b`.
 - `error-tracer db check` and `error-tracer db backup` failed with
   `invalid uri authority` whenever the database path or the backup destination
   was relative, which includes the default `ERROR_TRACER_DATABASE_PATH`.

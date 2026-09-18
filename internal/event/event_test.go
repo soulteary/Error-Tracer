@@ -420,3 +420,72 @@ func TestNormalizeKeepsFingerprintStableWhileScrubbingStacks(t *testing.T) {
 		)
 	}
 }
+
+func TestFingerprintSeparatesCallSitesUnderAnAtHeader(t *testing.T) {
+	// The Firefox frame pattern allowed whitespace in the name segment, so an
+	// ordinary first line containing "@" and ending in ":<digits>" was taken
+	// for a frame. Every error sharing that line then grouped together no
+	// matter where it was actually thrown.
+	header := "connect to alice@example.com:443"
+	checkout := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   header + "\n    at checkout (https://app.example.com/a.js:10:2)",
+	}
+	payment := Event{
+		Kind:    KindError,
+		Message: "boom",
+		Stack:   header + "\n    at payment (https://app.example.com/a.js:40:7)",
+	}
+	checkout.Normalize()
+	payment.Normalize()
+
+	if checkout.Fingerprint() == payment.Fingerprint() {
+		t.Fatalf(
+			"Fingerprint() = %q for both call sites, want distinct issues",
+			checkout.Fingerprint(),
+		)
+	}
+	if got := firstStackFrame(checkout.Stack); got != "at checkout (https://app.example.com/a.js:10:2)" {
+		t.Fatalf("firstStackFrame() = %q, want the real V8 frame", got)
+	}
+}
+
+func TestFirstStackFrameStillRecognizesFirefoxFrames(t *testing.T) {
+	tests := []struct {
+		name  string
+		stack string
+		want  string
+	}{
+		{
+			name:  "named frame",
+			stack: "checkout@https://app.example.com/a.js:10:2",
+			want:  "checkout@https://app.example.com/a.js:10:2",
+		},
+		{
+			name:  "anonymous frame",
+			stack: "@https://app.example.com/a.js:10:2",
+			want:  "@https://app.example.com/a.js:10:2",
+		},
+		{
+			name:  "nested function notation",
+			stack: "Foo.prototype.bar/<@https://app.example.com/a.js:10:2",
+			want:  "Foo.prototype.bar/<@https://app.example.com/a.js:10:2",
+		},
+		{
+			name:  "query string is dropped from the hashed frame",
+			stack: "checkout@https://app.example.com/a.js?v=2:10:2",
+			want:  "checkout@https://app.example.com/a.js:10:2",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			captured := Event{Kind: KindError, Message: "boom", Stack: test.stack}
+			captured.Normalize()
+			if got := firstStackFrame(captured.Stack); got != test.want {
+				t.Fatalf("firstStackFrame() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

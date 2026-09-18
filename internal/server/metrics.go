@@ -147,7 +147,7 @@ func (m *serviceMetrics) render(ready, storeReady, demo bool) string {
 	for _, key := range requestKeys {
 		fmt.Fprintf(
 			&output,
-			"error_tracer_http_requests_total{method=%q,route=%q,status=%q} %d\n",
+			"error_tracer_http_requests_total{method=\"%s\",route=\"%s\",status=\"%s\"} %d\n",
 			metricLabel(key.method), metricLabel(key.route), strconv.Itoa(key.status), requests[key],
 		)
 	}
@@ -160,7 +160,7 @@ func (m *serviceMetrics) render(ready, storeReady, demo bool) string {
 			cumulative += metric.buckets[index]
 			fmt.Fprintf(
 				&output,
-				"error_tracer_http_request_duration_seconds_bucket{method=%q,route=%q,le=%q} %d\n",
+				"error_tracer_http_request_duration_seconds_bucket{method=\"%s\",route=\"%s\",le=\"%s\"} %d\n",
 				metricLabel(key.method), metricLabel(key.route),
 				strconv.FormatFloat(upperBound, 'g', -1, 64), cumulative,
 			)
@@ -168,18 +168,18 @@ func (m *serviceMetrics) render(ready, storeReady, demo bool) string {
 		cumulative += metric.buckets[len(requestDurationBuckets)]
 		fmt.Fprintf(
 			&output,
-			"error_tracer_http_request_duration_seconds_bucket{method=%q,route=%q,le=\"+Inf\"} %d\n",
+			"error_tracer_http_request_duration_seconds_bucket{method=\"%s\",route=\"%s\",le=\"+Inf\"} %d\n",
 			metricLabel(key.method), metricLabel(key.route), cumulative,
 		)
 		fmt.Fprintf(
 			&output,
-			"error_tracer_http_request_duration_seconds_sum{method=%q,route=%q} %s\n",
+			"error_tracer_http_request_duration_seconds_sum{method=\"%s\",route=\"%s\"} %s\n",
 			metricLabel(key.method), metricLabel(key.route),
 			strconv.FormatFloat(metric.sum, 'g', -1, 64),
 		)
 		fmt.Fprintf(
 			&output,
-			"error_tracer_http_request_duration_seconds_count{method=%q,route=%q} %d\n",
+			"error_tracer_http_request_duration_seconds_count{method=\"%s\",route=\"%s\"} %d\n",
 			metricLabel(key.method), metricLabel(key.route), metric.count,
 		)
 	}
@@ -246,6 +246,10 @@ func metricRoute(pattern string) string {
 	return pattern
 }
 
+// metricLabel applies the three escapes the Prometheus text format defines.
+// Its result is written with %s inside literal quotes: passing it to %q escaped
+// the value a second time, so a label containing a quote was exposed as a\"b
+// rather than a"b.
 func metricLabel(value string) string {
 	value = strings.ReplaceAll(value, "\\", "\\\\")
 	value = strings.ReplaceAll(value, "\n", "\\n")
