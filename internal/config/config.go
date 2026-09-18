@@ -19,7 +19,9 @@ const (
 	defaultRatePerMinute     = 120
 	defaultRateBurst         = 30
 	defaultShutdownTimeout   = 10 * time.Second
+	defaultRetentionDays     = 90
 	maxRetentionDays         = 3650
+	maxIssueLimit            = 10_000_000
 )
 
 // Config contains process-level settings for the Error-Tracer service.
@@ -39,6 +41,8 @@ type Config struct {
 	MetricsEnabled           bool
 	DemoMode                 bool
 	RetentionDays            int
+	MaxIssues                int
+	SDKCrossOrigin           bool
 }
 
 // FromEnvironment loads configuration without mutating process state.
@@ -99,7 +103,17 @@ func FromEnvironment() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	retentionDays, err := nonNegativeInteger("ERROR_TRACER_RETENTION_DAYS", 0, maxRetentionDays)
+	retentionDays, err := nonNegativeInteger(
+		"ERROR_TRACER_RETENTION_DAYS", defaultRetentionDays, maxRetentionDays,
+	)
+	if err != nil {
+		return Config{}, err
+	}
+	maxIssues, err := nonNegativeInteger("ERROR_TRACER_MAX_ISSUES", 0, maxIssueLimit)
+	if err != nil {
+		return Config{}, err
+	}
+	sdkCrossOrigin, err := strictBoolean("ERROR_TRACER_SDK_CORS_ENABLED", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -120,6 +134,8 @@ func FromEnvironment() (Config, error) {
 		MetricsEnabled:           metricsEnabled,
 		DemoMode:                 demoMode,
 		RetentionDays:            retentionDays,
+		MaxIssues:                maxIssues,
+		SDKCrossOrigin:           sdkCrossOrigin,
 	}, nil
 }
 

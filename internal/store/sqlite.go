@@ -1075,6 +1075,52 @@ func (s *SQLite) PruneIssues(ctx context.Context, projectID string, cutoff time.
 	return deleted, nil
 }
 
+// EnforceIssueLimit atomically removes at most PruneBatchSize issues in one
+// project, oldest first, while the project holds more than limit of them. It
+// bounds issue cardinality, which retention alone cannot: a fingerprint
+// includes the client-supplied message, so the row count is driven by what
+// reporters send rather than by how long data is kept. Returns the number of
+// issues removed; call it until it returns fewer than PruneBatchSize.
+func (s *SQLite) EnforceIssueLimit(
+	ctx context.Context, projectID string, limit int,
+) (int64, error) {
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return 0, ErrProjectRequired
+	}
+	if limit < 1 {
+		return 0, ErrIssueLimitRequired
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	// The subquery keeps the newest `limit` rows and offers the rest oldest
+	// first, so the delete walks issues_project_last_seen in index order.
+	result, err := s.db.ExecContext(
+		ctx,
+		`DELETE FROM issues WHERE rowid IN (
+    SELECT rowid FROM (
+        SELECT rowid FROM issues
+        WHERE project_id = ?
+        ORDER BY last_seen DESC, fingerprint ASC
+        LIMIT ? OFFSET ?
+    )
+)`,
+		projectID,
+		PruneBatchSize,
+		limit,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("enforce issue limit: %w", err)
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("read evicted issue count: %w", err)
+	}
+	return deleted, nil
+}
+
 type rowQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }

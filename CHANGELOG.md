@@ -5,6 +5,16 @@ Notable changes to Error-Tracer are documented here. The project follows
 
 ## [2.0.0] - Unreleased
 
+### Breaking
+
+- `ERROR_TRACER_RETENTION_DAYS` now defaults to `90` instead of `0`. A
+  deployment that never configured retention kept every issue forever; after
+  upgrading, the first sweep **permanently deletes issues whose last
+  occurrence is older than 90 days**, along with their retained event history.
+  Set `ERROR_TRACER_RETENTION_DAYS=0` before upgrading to keep the previous
+  behaviour, or set it to the window you actually want. Back up first with
+  `error-tracer db backup`.
+
 ### Added
 
 - A self-contained Go service with SQLite persistence, an authenticated issue
@@ -15,6 +25,15 @@ Notable changes to Error-Tracer are documented here. The project follows
   batching, retry limits, and delivery counters.
 - English and Simplified Chinese documentation and dashboard interfaces.
 - An isolated read-only demo command with realistic in-memory samples.
+- `ERROR_TRACER_MAX_ISSUES` caps issues per project, evicting the least
+  recently seen first and cascading their event history. Retention bounds how
+  long data is kept; this bounds how much there is, which a reporter drives
+  because a fingerprint includes the client-supplied message. Swept every five
+  minutes so it reacts to ingestion rather than to the clock.
+- `ERROR_TRACER_SDK_CORS_ENABLED` serves the browser SDK with
+  `Access-Control-Allow-Origin`, which a page needs before it can pin the
+  bundle with Subresource Integrity against the `ETag` already served.
+- A startup warning when neither retention nor the issue cap is configured.
 - Database, application, and HTTP load tests with explicit safety limits.
 - Reproducible multi-platform release archives, checksums, SPDX SBOMs,
   provenance attestations, and multi-architecture container images.
@@ -53,6 +72,9 @@ Notable changes to Error-Tracer are documented here. The project follows
 
 ### Fixed
 
+- Startup no longer ignores `SIGTERM`. Opening the database runs the migrations
+  and the event-history reconcile under a background context, so a rolling
+  update had to wait out the whole startup before the container would stop.
 - A paginated response whose cursor could not be encoded dropped
   `next_cursor` entirely, which a client reads as the end of the walk. The
   invariant violation is now logged and reported as `500 internal_error`.

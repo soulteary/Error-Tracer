@@ -20,6 +20,7 @@ type Server struct {
 	store          store.Store
 	demoStore      store.Store
 	demoOnly       bool
+	sdkCrossOrigin bool
 	projectID      string
 	ingestKey      string
 	adminTokens    []string
@@ -50,6 +51,10 @@ type Options struct {
 	DemoMode           bool
 	DemoOnly           bool
 	MetricsEnabled     bool
+	// SDKCrossOrigin serves the browser SDK with Access-Control-Allow-Origin,
+	// which a page needs before it can pin the bundle with Subresource
+	// Integrity.
+	SDKCrossOrigin bool
 }
 
 // New creates a service with liveness and readiness endpoints.
@@ -71,6 +76,7 @@ func New(options Options) *Server {
 	server := &Server{
 		store:          options.Store,
 		demoOnly:       options.DemoOnly,
+		sdkCrossOrigin: options.SDKCrossOrigin,
 		projectID:      options.ProjectID,
 		ingestKey:      options.IngestKey,
 		adminTokens:    adminTokens,

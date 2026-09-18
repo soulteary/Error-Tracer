@@ -1393,3 +1393,122 @@ func chdir(t *testing.T, directory string) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(working) })
 }
+
+func TestSQLiteEnforceIssueLimitEvictsOldestFirst(t *testing.T) {
+	database := openTestSQLite(t, filepath.Join(t.TempDir(), "error-tracer.db"))
+	base := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+
+	// A fingerprint includes the message, so distinct messages are distinct
+	// issues — which is exactly how a reporter drives up cardinality.
+	for index := 0; index < 12; index++ {
+		captured := event.Event{
+			Kind:       event.KindError,
+			Message:    fmt.Sprintf("failure-%02d", index),
+			ReceivedAt: base.Add(time.Duration(index) * time.Minute),
+		}
+		captured.Normalize()
+		if _, err := database.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("Record(%d) error = %v", index, err)
+		}
+	}
+
+	evicted, err := database.EnforceIssueLimit(context.Background(), "project-a", 5)
+	if err != nil {
+		t.Fatalf("EnforceIssueLimit() error = %v", err)
+	}
+	if evicted != 7 {
+		t.Fatalf("evicted = %d, want 7", evicted)
+	}
+
+	page, err := database.ListIssues(context.Background(), "project-a", ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if page.Total != 5 {
+		t.Fatalf("remaining issues = %d, want 5", page.Total)
+	}
+	// The survivors must be the newest five, not an arbitrary five.
+	for _, issue := range page.Issues {
+		if issue.LastEvent.Message < "failure-07" {
+			t.Fatalf("issue %q survived, want only the newest five", issue.LastEvent.Message)
+		}
+	}
+
+	// Idempotent once the project is at or below the limit.
+	again, err := database.EnforceIssueLimit(context.Background(), "project-a", 5)
+	if err != nil {
+		t.Fatalf("second EnforceIssueLimit() error = %v", err)
+	}
+	if again != 0 {
+		t.Fatalf("second call evicted = %d, want 0", again)
+	}
+}
+
+func TestSQLiteEnforceIssueLimitValidatesArguments(t *testing.T) {
+	database := openTestSQLite(t, filepath.Join(t.TempDir(), "error-tracer.db"))
+
+	if _, err := database.EnforceIssueLimit(context.Background(), " ", 10); !errors.Is(err, ErrProjectRequired) {
+		t.Fatalf("empty project error = %v, want ErrProjectRequired", err)
+	}
+	if _, err := database.EnforceIssueLimit(context.Background(), "project-a", 0); !errors.Is(err, ErrIssueLimitRequired) {
+		t.Fatalf("zero limit error = %v, want ErrIssueLimitRequired", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := database.EnforceIssueLimit(cancelled, "project-a", 10); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled error = %v, want context.Canceled", err)
+	}
+}
+
+func TestSQLiteEnforceIssueLimitCascadesEventHistory(t *testing.T) {
+	database := openTestSQLite(t, filepath.Join(t.TempDir(), "error-tracer.db"))
+	base := time.Date(2026, time.September, 18, 12, 0, 0, 0, time.UTC)
+
+	for index := 0; index < 3; index++ {
+		captured := event.Event{
+			Kind:       event.KindError,
+			Message:    fmt.Sprintf("failure-%02d", index),
+			ReceivedAt: base.Add(time.Duration(index) * time.Minute),
+		}
+		captured.Normalize()
+		if _, err := database.Record(context.Background(), "project-a", captured); err != nil {
+			t.Fatalf("Record(%d) error = %v", index, err)
+		}
+	}
+
+	if _, err := database.EnforceIssueLimit(context.Background(), "project-a", 1); err != nil {
+		t.Fatalf("EnforceIssueLimit() error = %v", err)
+	}
+	var events int
+	if err := database.db.QueryRowContext(
+		context.Background(), "SELECT COUNT(*) FROM events",
+	).Scan(&events); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if events != 1 {
+		t.Fatalf("retained events = %d, want 1 (the surviving issue's)", events)
+	}
+}
+
+func TestOpenSQLiteWithOptionsHonoursContextCancellation(t *testing.T) {
+	// Opening runs the migrations and the event-history reconcile. main used a
+	// background context here, so a container receiving SIGTERM during a long
+	// startup had to wait out the whole thing before it would stop.
+	path := filepath.Join(t.TempDir(), "error-tracer.db")
+	database := openTestSQLite(t, path)
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	opened, err := OpenSQLiteWithOptions(cancelled, path, SQLiteOptions{MaxOpenConnections: 1})
+	if err == nil {
+		_ = opened.Close()
+		t.Fatal("OpenSQLiteWithOptions() error = nil for a cancelled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenSQLiteWithOptions() error = %v, want context.Canceled", err)
+	}
+}

@@ -89,10 +89,17 @@ Compose 使用名为 `error-tracer-data` 的卷保存 `error-tracer.db`。
 
 ## 浏览器 SDK
 
-服务在 `/assets/error-tracer.js` 提供内嵌 SDK：
+服务在 `/assets/error-tracer.js` 提供内嵌 SDK。响应带有按内容计算的 `ETag`，
+因此可以用同一个哈希通过 Subresource Integrity 校验该文件——这需要
+`crossorigin="anonymous"`，而后者要求采集端设置
+`ERROR_TRACER_SDK_CORS_ENABLED=true`：
 
 ```html
-<script src="https://errors.example.com/assets/error-tracer.js"></script>
+<script
+  src="https://errors.example.com/assets/error-tracer.js"
+  integrity="sha256-替换为响应返回的-etag"
+  crossorigin="anonymous"
+></script>
 <script>
   const tracer = ErrorTracer.init({
     endpoint: "https://errors.example.com/api/v1/events",
@@ -274,12 +281,24 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_METRICS_ENABLED` | 否 | `false` | 在 `/metrics` 开放无鉴权 Prometheus 指标 |
 | `ERROR_TRACER_RATE_PER_MINUTE` | 否 | `120` | 每个直接对等端每分钟分别补充的事件令牌和预校验请求令牌数 |
 | `ERROR_TRACER_RATE_BURST` | 否 | `30` | 每个直接对等端的独立事件桶和请求桶各自最大突发量 |
-| `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
+| `ERROR_TRACER_RETENTION_DAYS` | 否 | `90` | 删除超过指定天数未再次出现的问题；`0` 表示禁用按时间清理 |
+| `ERROR_TRACER_MAX_ISSUES` | 否 | `0` | 每个项目最多保留的问题数，超出时优先淘汰最久未出现的；`0` 表示不启用上限 |
+| `ERROR_TRACER_SDK_CORS_ENABLED` | 否 | `false` | 为 `/assets/error-tracer.js` 返回 `Access-Control-Allow-Origin: *`，使页面可以用 Subresource Integrity 校验它 |
 | `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
 
 `ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。
 `ERROR_TRACER_BIND` 只用于 Compose 的宿主机监听地址，默认值为 `127.0.0.1`；
-只有在服务前面已经有 TLS 终端时，才应设置为 `0.0.0.0`。来源
+只有在服务前面已经有 TLS 终端时，才应设置为 `0.0.0.0`。
+
+### 限制存储增长
+
+保留期和问题数上限约束的是两件不同的事，通常两者都应配置。
+`ERROR_TRACER_RETENTION_DAYS` 约束数据保留多久；`ERROR_TRACER_MAX_ISSUES`
+约束一个项目最多能有多少个问题——因为指纹包含客户端提交的 message，问题数量由
+上报方发送的内容决定，而非由数据保留多久决定，仅靠时间无法约束它。
+按时间的清理每天执行一次；上限每五分钟执行一次，因为它需要对写入而非对时钟作出
+反应。淘汰时优先移除最久未出现的问题，并级联删除其保留的事件历史。
+两种约束都未配置时，服务会在启动时打印一条告警。来源
 白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
 客户端仍可提交事件。
 

@@ -101,10 +101,17 @@ read-only demo described in [Demo mode](docs/demo.md).
 
 ## Browser SDK
 
-The service exposes its embedded SDK at `/assets/error-tracer.js`:
+The service exposes its embedded SDK at `/assets/error-tracer.js`. The response
+carries a content-derived `ETag`, so the same hash can pin the bundle with
+Subresource Integrity — that needs `crossorigin="anonymous"`, which in turn
+needs `ERROR_TRACER_SDK_CORS_ENABLED=true` on the collector:
 
 ```html
-<script src="https://errors.example.com/assets/error-tracer.js"></script>
+<script
+  src="https://errors.example.com/assets/error-tracer.js"
+  integrity="sha256-replace-with-the-served-etag"
+  crossorigin="anonymous"
+></script>
 <script>
   const tracer = ErrorTracer.init({
     endpoint: "https://errors.example.com/api/v1/events",
@@ -326,12 +333,26 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_METRICS_ENABLED` | No | `false` | Expose unauthenticated Prometheus metrics at `/metrics` |
 | `ERROR_TRACER_RATE_PER_MINUTE` | No | `120` | Event and pre-validation request tokens refilled per minute per direct peer |
 | `ERROR_TRACER_RATE_BURST` | No | `30` | Maximum burst for each separate event and request bucket per direct peer |
-| `ERROR_TRACER_RETENTION_DAYS` | No | `0` | Delete issues inactive for this many days; `0` disables cleanup |
+| `ERROR_TRACER_RETENTION_DAYS` | No | `90` | Delete issues inactive for this many days; `0` disables age-based cleanup |
+| `ERROR_TRACER_MAX_ISSUES` | No | `0` | Keep at most this many issues per project, evicting the least recently seen; `0` disables the cap |
+| `ERROR_TRACER_SDK_CORS_ENABLED` | No | `false` | Serve `/assets/error-tracer.js` with `Access-Control-Allow-Origin: *` so a page can pin it with Subresource Integrity |
 | `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
 `ERROR_TRACER_BIND` is a Compose-only host-interface setting and defaults to
 `127.0.0.1`; set it to `0.0.0.0` only when a TLS terminator fronts the service.
+
+### Bounding storage
+
+Retention and the issue cap bound different things, and a deployment usually
+wants both. `ERROR_TRACER_RETENTION_DAYS` bounds how long data is kept.
+`ERROR_TRACER_MAX_ISSUES` bounds how many issues a project may hold, because a
+fingerprint includes the client-supplied message: issue count is driven by what
+reporters send, not by how long data is kept, so age alone cannot bound it.
+Age is swept once a day; the cap is swept every five minutes, since it has to
+react to ingestion rather than to the clock. Eviction removes the least
+recently seen issues first and cascades their retained event history. The
+service logs a warning at startup when neither bound is configured.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
 

@@ -27,6 +27,7 @@ var (
 	ErrEventsRequired           = errors.New("at least one event is required")
 	ErrReceivedAtEmpty          = errors.New("event received_at is required")
 	ErrCutoffRequired           = errors.New("retention cutoff is required")
+	ErrIssueLimitRequired       = errors.New("issue limit must be positive")
 	ErrInvalidEventHistoryLimit = errors.New("event history limit must be between 1 and 1000")
 )
 
