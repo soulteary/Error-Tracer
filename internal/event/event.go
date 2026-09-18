@@ -68,7 +68,7 @@ func (e *ValidationError) Error() string {
 // data, and normalizes tag keys before validation and fingerprinting.
 func (e *Event) Normalize() {
 	e.Message = strings.TrimSpace(e.Message)
-	e.Stack = strings.TrimSpace(e.Stack)
+	e.Stack = sanitizeStackURLs(strings.TrimSpace(e.Stack))
 	e.SourceURL = sanitizeURL(e.SourceURL)
 	e.PageURL = sanitizeURL(e.PageURL)
 	e.Release = strings.TrimSpace(e.Release)
@@ -229,6 +229,36 @@ func sanitizeURL(value string) string {
 	parsed.ForceQuery = false
 	parsed.Fragment = ""
 	return parsed.String()
+}
+
+// stackURLPattern matches an absolute URL inside a stack trace. A frame ends
+// the URL at whitespace or at the closing parenthesis of a V8 frame.
+var stackURLPattern = regexp.MustCompile(`[a-zA-Z][a-zA-Z0-9+.\-]*://[^\s)'"]+`)
+
+// sanitizeStackURLs applies sanitizeURL to every URL embedded in a stack
+// trace. SourceURL and PageURL were already scrubbed, but the same URLs appear
+// in the stack, which was persisted and rendered verbatim — so a frame such as
+// "at run (https://user:pw@api.example.com/app.js?token=SECRET:10:2)" leaked
+// the credentials and the token into storage and into the dashboard.
+//
+// A trailing ":line" or ":line:column" belongs to the frame rather than to the
+// URL, so it is split off and restored around the scrub. This does not disturb
+// existing fingerprints: canonicalizeStackLocation already drops everything
+// from the first "?" or "#" of the frame it hashes.
+func sanitizeStackURLs(stack string) string {
+	if !strings.Contains(stack, "://") {
+		return stack
+	}
+	return stackURLPattern.ReplaceAllStringFunc(stack, func(match string) string {
+		position := ""
+		if bounds := stackPositionPattern.FindStringIndex(match); bounds != nil {
+			position = match[bounds[0]:]
+			match = match[:bounds[0]]
+		}
+		// sanitizeURL fails closed on an unparseable URL, so the frame keeps
+		// its position but loses a location that could still carry userinfo.
+		return sanitizeURL(match) + position
+	})
 }
 
 func firstStackFrame(stack string) string {
