@@ -199,10 +199,12 @@ Rate limiting is charged per event, not per HTTP request. Set
 to submit. A batch whose event count exceeds the configured burst receives
 `422 rate_limit_burst_exceeded` without a `Retry-After` header because that request
 can never fit the bucket; split the batch or raise the configured burst.
-Each POST also consumes one token from a separate request bucket before parsing,
-using the same rate and burst settings, so malformed and unauthorized traffic
-remains bounded. After authentication and validation, all event tokens for a
-valid single or batch request are charged atomically.
+Each POST also consumes one token from a separate request bucket before the
+origin check and before parsing, using the same rate and burst settings, so
+malformed and unauthorized traffic remains bounded. `OPTIONS` preflights are
+deliberately exempt, because a browser must preflight before it can POST.
+After authentication and validation, all event tokens for a valid single or
+batch request are charged atomically.
 
 ```json
 {
