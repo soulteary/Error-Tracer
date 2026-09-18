@@ -280,6 +280,10 @@ func randomEventID() (string, error) {
 func writeJSON(w http.ResponseWriter, statusCode int, value any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	// Issue payloads echo client-controlled event text, and the asset,
+	// dashboard and metrics handlers already set this. Without it a browser
+	// may sniff a response into a type the collector never declared.
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(value)
 }

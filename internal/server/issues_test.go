@@ -497,3 +497,105 @@ func authorizedRequest(method, target string) *http.Request {
 	request.Header.Set("Authorization", "Bearer "+testAdminToken)
 	return request
 }
+
+func TestJSONResponsesDeclareNoSniff(t *testing.T) {
+	// Issue payloads echo client-controlled event text, and the asset,
+	// dashboard and metrics handlers already set this header.
+	app := newTestServer()
+	for _, target := range []struct {
+		name    string
+		request *http.Request
+	}{
+		{"health", httptest.NewRequest(http.MethodGet, "/healthz", nil)},
+		{"readiness", httptest.NewRequest(http.MethodGet, "/readyz", nil)},
+		{"public metadata", httptest.NewRequest(http.MethodGet, "/api/v1/meta", nil)},
+		{"unauthorized issues", httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil)},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, target.request)
+			if got := response.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Fatalf("X-Content-Type-Options = %q, want %q", got, "nosniff")
+			}
+		})
+	}
+}
+
+func TestIssuePageRejectsAnUnencodableCursor(t *testing.T) {
+	// Returning an absent next_cursor for a cursor the encoder rejects would
+	// tell the client the walk is finished and silently truncate the result.
+	response := httptest.NewRecorder()
+	writeIssuePage(response, store.IssuePage{
+		Issues: []store.Issue{},
+		Next:   &store.ListCursor{Fingerprint: "not-hex"},
+	})
+
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusInternalServerError)
+	}
+	var failure errorResponse
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if failure.Error != "internal_error" {
+		t.Fatalf("error = %q, want %q", failure.Error, "internal_error")
+	}
+}
+
+func TestAdminAuthorizationAcceptsAnyConfiguredToken(t *testing.T) {
+	// The availability guard looked only at the first slot, so an Options
+	// value carrying a credential in a later one answered 503.
+	app := New(Options{
+		Store:              store.NewMemory(),
+		ProjectID:          "project-a",
+		IngestKey:          "0123456789abcdef",
+		PreviousAdminToken: "0123456789abcdefghijklmn",
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil)
+	request.Header.Set("Authorization", "Bearer 0123456789abcdefghijklmn")
+	response := httptest.NewRecorder()
+	app.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body = %s",
+			response.Code, http.StatusOK, response.Body.String())
+	}
+
+	// Readiness has to agree, or an orchestrator keeps a working deployment
+	// out of service.
+	readiness := httptest.NewRecorder()
+	app.Handler().ServeHTTP(readiness, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	if readiness.Code != http.StatusOK {
+		t.Fatalf("/readyz status = %d, want %d", readiness.Code, http.StatusOK)
+	}
+}
+
+func TestAdminAuthorizationRejectsAnEmptyBearerToken(t *testing.T) {
+	// An empty slot in the candidate list is matched by an empty bearer
+	// token, which would authorize a request that carried no credential.
+	app := New(Options{
+		Store:              store.NewMemory(),
+		ProjectID:          "project-a",
+		IngestKey:          "0123456789abcdef",
+		PreviousAdminToken: "0123456789abcdefghijklmn",
+	})
+	for _, token := range app.adminTokens {
+		if token == "" {
+			t.Fatalf("adminTokens = %q, want no empty candidate", app.adminTokens)
+		}
+	}
+
+	for _, header := range []string{"Bearer ", "Bearer", "bearer ", "Bearer  "} {
+		t.Run(header, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/issues", nil)
+			request.Header.Set("Authorization", header)
+			response := httptest.NewRecorder()
+			app.Handler().ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d; body = %s",
+					response.Code, http.StatusUnauthorized, response.Body.String())
+			}
+		})
+	}
+}
