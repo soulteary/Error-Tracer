@@ -24,12 +24,11 @@ var (
 	dashboardScript = loadDashboardAsset("dashboard/dashboard.js", "text/javascript; charset=utf-8", "public, max-age=300")
 )
 
+// dashboard serves the embedded index. The route is registered as GET /{$},
+// Go's exact-match pattern, so this handler only ever sees the path "/"; the
+// guard that used to stand here could never run and implied a subtree
+// registration that does not exist.
 func (s *Server) dashboard(w http.ResponseWriter, request *http.Request) {
-	if request.URL.Path != "/" {
-		dashboardSecurityHeaders(w)
-		http.NotFound(w, request)
-		return
-	}
 	serveDashboardAsset(w, request, dashboardIndex)
 }
 

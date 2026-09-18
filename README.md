@@ -324,6 +324,8 @@ history rows in the same transaction that records new events.
 | `ERROR_TRACER_DEMO_MODE` | No | `false` | Expose the isolated, public, read-only demo |
 
 `ERROR_TRACER_PORT` is a Compose-only host-port setting and defaults to `8080`.
+`ERROR_TRACER_BIND` is a Compose-only host-interface setting and defaults to
+`127.0.0.1`; set it to `0.0.0.0` only when a TLS terminator fronts the service.
 An empty origin allowlist disables browser-origin ingestion while still
 allowing clients that do not send an `Origin` header.
 

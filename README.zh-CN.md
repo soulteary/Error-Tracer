@@ -273,7 +273,9 @@ Authorization: Bearer 替换为管理员令牌
 | `ERROR_TRACER_RETENTION_DAYS` | 否 | `0` | 删除超过指定天数未再次出现的问题；`0` 表示禁用清理 |
 | `ERROR_TRACER_DEMO_MODE` | 否 | `false` | 开放隔离的公开只读演示 |
 
-`ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。来源
+`ERROR_TRACER_PORT` 只用于 Compose 的宿主机端口，默认值为 `8080`。
+`ERROR_TRACER_BIND` 只用于 Compose 的宿主机监听地址，默认值为 `127.0.0.1`；
+只有在服务前面已经有 TLS 终端时，才应设置为 `0.0.0.0`。来源
 白名单为空时，带 `Origin` 的浏览器采集会被禁用；不发送 `Origin` 的非浏览器
 客户端仍可提交事件。
 

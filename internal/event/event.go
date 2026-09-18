@@ -46,7 +46,7 @@ type Event struct {
 	Line        int               `json:"line,omitempty"`
 	Column      int               `json:"column,omitempty"`
 	OccurredAt  *time.Time        `json:"occurred_at,omitempty"`
-	ReceivedAt  time.Time         `json:"received_at,omitempty"`
+	ReceivedAt  time.Time         `json:"received_at,omitzero"`
 	Release     string            `json:"release,omitempty"`
 	Environment string            `json:"environment,omitempty"`
 	UserAgent   string            `json:"user_agent,omitempty"`

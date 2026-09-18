@@ -11,7 +11,9 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "${ERROR_TRACER_PORT:-8080}:8080"
+      # Loopback by default, matching the documented `docker run` command.
+      # Set ERROR_TRACER_BIND to 0.0.0.0 only behind a TLS terminator.
+      - "${ERROR_TRACER_BIND:-127.0.0.1}:${ERROR_TRACER_PORT:-8080}:8080"
     environment:
       ERROR_TRACER_ADDRESS: ":8080"
       ERROR_TRACER_DATABASE_PATH: "/data/error-tracer.db"
