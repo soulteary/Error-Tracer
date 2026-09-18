@@ -53,6 +53,16 @@ Notable changes to Error-Tracer are documented here. The project follows
 
 ### Fixed
 
+- Two dashboard text colours fell below the WCAG AA 4.5:1 contrast minimum at
+  the 10-12px sizes they were used at: `--subtle` reached 3.90:1 against the
+  panel surface and the admin-token placeholder only 2.45:1.
+- The dashboard had no `banner` landmark, because the masthead — brand,
+  version, language selector and connection state — sat inside `<main>`.
+- Changing the status filter or stepping a page rewrote the result summary and
+  the page indicator without announcing either to assistive technology.
+- The result summary could render an inverted range such as
+  "Showing 51-12 of 12" when retention pruning shrank the total during a
+  cursor walk.
 - The browser SDK stopped capturing entirely after a backward clock step — an
   NTP correction, a VM resume — because every stored rate-window stamp sat in
   the future where the 60-second cutoff could not reach it.

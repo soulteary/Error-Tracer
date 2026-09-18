@@ -390,7 +390,8 @@
       if (!isCurrentLoad(session, request)) {
         return;
       }
-      if (state.cursor && page.issues.length === 0 && state.cursorHistory.length > 0) {
+      const pageIssues = Array.isArray(page.issues) ? page.issues : [];
+      if (state.cursor && pageIssues.length === 0 && state.cursorHistory.length > 0) {
         state.cursor = state.cursorHistory.pop();
         state.pageIndex = Math.max(0, state.pageIndex - 1);
         query.set("cursor", state.cursor);
@@ -529,13 +530,16 @@
       : t("metrics.quiet");
 
     const pageOffset = state.pageIndex * state.limit;
-    const start = page.total ? pageOffset + 1 : 0;
-    const end = Math.min(pageOffset + issues.length, page.total || 0);
+    const total = page.total || 0;
+    const end = Math.min(pageOffset + issues.length, total);
+    // Retention pruning can shrink the total below pageOffset mid-walk, which
+    // used to render an inverted range such as "Showing 51-12 of 12".
+    const start = total ? Math.min(pageOffset + 1, end) : 0;
     elements.resultCopy.textContent = page.total
       ? t("issues.showing", {
-        start: integerFormat.format(start),
+          start: integerFormat.format(start),
         end: integerFormat.format(end),
-        total: integerFormat.format(page.total),
+        total: integerFormat.format(total),
       })
       : t("issues.noResults");
     elements.pageCopy.textContent = t("issues.page", {

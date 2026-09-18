@@ -13,7 +13,7 @@
   <div class="ambient ambient-one" aria-hidden="true"></div>
   <div class="ambient ambient-two" aria-hidden="true"></div>
 
-  <main class="shell">
+  <div class="shell">
     <header class="masthead">
       <a class="brand" href="/" aria-label="Error-Tracer home" data-i18n-aria-label="brand.homeAria">
         <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -39,6 +39,7 @@
       </div>
     </header>
 
+    <main>
     <section class="login-panel" id="login-panel" aria-labelledby="login-title">
       <div class="login-copy">
         <p class="eyebrow" data-i18n="login.eyebrow">Private control plane</p>
@@ -94,7 +95,7 @@
         <div class="panel-toolbar">
           <div>
             <h2 id="issues-title" data-i18n="issues.title">Issues</h2>
-            <p id="result-copy" data-i18n="issues.waiting">Waiting for data</p>
+            <p id="result-copy" role="status" data-i18n="issues.waiting">Waiting for data</p>
           </div>
           <label class="filter">
             <span data-i18n="issues.status">Status</span>
@@ -127,7 +128,7 @@
         </div>
 
         <footer class="pagination">
-          <span id="page-copy" data-i18n="issues.pageInitial">Page 1</span>
+          <span id="page-copy" role="status" data-i18n="issues.pageInitial">Page 1</span>
           <div>
             <button class="button button-quiet" id="previous-button" type="button" data-i18n="issues.previous">Previous</button>
             <button class="button button-quiet" id="next-button" type="button" data-i18n="issues.next">Next</button>
@@ -136,7 +137,8 @@
       </section>
       <p class="workspace-message" id="workspace-message" role="status"></p>
     </section>
-  </main>
+    </main>
+  </div>
 
   <dialog class="issue-dialog" id="issue-dialog" aria-labelledby="detail-title">
     <div class="dialog-shell">
