@@ -1,5 +1,7 @@
 # Error-Tracer
 
+[![Go Test Coverage](./.github/coverage.svg)](./.github/go-test-report.md) [![Go Report Card](./.github/goreportcard.svg)](./.github/goreportcard-report.md)
+
 [English](README.md)
 
 Error-Tracer 是一个轻量、自托管的浏览器错误收集器。当前服务使用 Go
