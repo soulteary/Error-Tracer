@@ -1,5 +1,7 @@
 # Error-Tracer
 
+[![Go Test Coverage](./.github/coverage.svg)](./.github/go-test-report.md) [![Go Report Card](./.github/goreportcard.svg)](./.github/goreportcard-report.md)
+
 [简体中文](README.zh-CN.md)
 
 Error-Tracer is a small, self-hosted browser error collector. The current
