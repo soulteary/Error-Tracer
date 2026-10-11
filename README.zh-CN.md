@@ -375,7 +375,7 @@ ERROR_TRACER_DATABASE_PATH=/data/error-tracer.db \
 
 ## 本地开发
 
-模块声明 Go 1.27。运行浏览器 SDK 测试和文档检查时需要 Bun 1.4.0 或更高版本。
+模块声明 Go 1.27.2。运行浏览器 SDK 测试和文档检查时需要 Bun 1.4.0 或更高版本。
 
 ```sh
 go mod verify
