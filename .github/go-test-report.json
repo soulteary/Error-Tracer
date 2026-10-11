@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "tests": {
+    "total": 190,
+    "passed": 190,
+    "failed": 0,
+    "skipped": 0
+  },
+  "coverage": {
+    "covered_statements": 1775,
+    "total_statements": 2098,
+    "percentage": 84.6,
+    "threshold": 75
+  },
+  "packages": [
+    {
+      "name": "cmd/error-tracer",
+      "status": "pass",
+      "tests": 15,
+      "failed": 0,
+      "coverage": 75.84
+    },
+    {
+      "name": "cmd/error-tracer-loadtest",
+      "status": "pass",
+      "tests": 8,
+      "failed": 0,
+      "coverage": 73.33
+    },
+    {
+      "name": "internal/buildinfo",
+      "status": "pass",
+      "tests": 1,
+      "failed": 0,
+      "coverage": 100
+    },
+    {
+      "name": "internal/config",
+      "status": "pass",
+      "tests": 18,
+      "failed": 0,
+      "coverage": 98.35
+    },
+    {
+      "name": "internal/event",
+      "status": "pass",
+      "tests": 21,
+      "failed": 0,
+      "coverage": 87.33
+    },
+    {
+      "name": "internal/healthcheck",
+      "status": "pass",
+      "tests": 5,
+      "failed": 0,
+      "coverage": 90.63
+    },
+    {
+      "name": "internal/server",
+      "status": "pass",
+      "tests": 76,
+      "failed": 0,
+      "coverage": 90.25
+    },
+    {
+      "name": "internal/store",
+      "status": "pass",
+      "tests": 46,
+      "failed": 0,
+      "coverage": 81.09
+    },
+    {
+      "name": "sdk",
+      "status": "no_tests",
+      "tests": 0,
+      "failed": 0,
+      "coverage": 0
+    }
+  ],
+  "failures": null
+}
