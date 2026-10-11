@@ -448,7 +448,7 @@ role-based access control.
 
 ## Local development
 
-The module declares Go 1.27. Bun 1.4.0 or newer is needed for browser SDK tests
+The module declares Go 1.27.2. Bun 1.4.0 or newer is needed for browser SDK tests
 and documentation checks.
 
 ```sh
