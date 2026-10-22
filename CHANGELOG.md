@@ -3,7 +3,7 @@
 Notable changes to Error-Tracer are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-22
 
 ### Breaking
 
