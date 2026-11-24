@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CI_RECIPES_VERSION: 6e790adf553ecff9f5ba5a3d0beeb9a9256a29ee
+  CI_RECIPES_VERSION: v0.1.0
 
 jobs:
   release:
@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
           cache: true
@@ -101,7 +101,7 @@ jobs:
         run: ci-recipes error-tracer build-release "${VERSION}" dist
 
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: anchore/sbom-action@dfcb83b97731532d72be422cbc51ee64adb6fd56 # v0.24.4
         with:
           file: dist/error-tracer_${{ env.VERSION }}_linux_amd64/error-tracer
           format: spdx-json
